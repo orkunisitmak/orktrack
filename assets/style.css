@@ -1,0 +1,459 @@
+/* OrkTrack - AI Garmin Dashboard Custom Styles */
+
+/* Import modern fonts */
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* CSS Variables */
+:root {
+    --primary: #6366f1;
+    --primary-dark: #4f46e5;
+    --primary-light: #818cf8;
+    --secondary: #22c55e;
+    --accent: #f59e0b;
+    --background: #0f0f23;
+    --surface: #1a1a2e;
+    --surface-light: #252542;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --border: #334155;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --info: #3b82f6;
+    --gradient-1: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    --gradient-2: linear-gradient(135deg, #22c55e 0%, #14b8a6 100%);
+    --gradient-3: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+}
+
+/* Global styles */
+.stApp {
+    background: var(--background);
+    font-family: 'Outfit', sans-serif;
+}
+
+/* Main container */
+.main .block-container {
+    padding: 2rem 3rem;
+    max-width: 1400px;
+}
+
+/* Headers */
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+h1 {
+    font-size: 2.5rem;
+    background: var(--gradient-1);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 0.5rem;
+}
+
+/* Metric cards */
+[data-testid="stMetric"] {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.5rem;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+[data-testid="stMetric"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(99, 102, 241, 0.15);
+}
+
+[data-testid="stMetricLabel"] {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+[data-testid="stMetricValue"] {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+[data-testid="stMetricDelta"] {
+    font-size: 0.875rem;
+}
+
+/* Sidebar */
+[data-testid="stSidebar"] {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+}
+
+[data-testid="stSidebar"] .stSelectbox label,
+[data-testid="stSidebar"] .stDateInput label {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* Navigation styling */
+.nav-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.875rem 1rem;
+    border-radius: 12px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: all 0.2s ease;
+    margin-bottom: 0.5rem;
+}
+
+.nav-link:hover {
+    background: var(--surface-light);
+    color: var(--text-primary);
+}
+
+.nav-link.active {
+    background: var(--gradient-1);
+    color: white;
+}
+
+/* Buttons */
+.stButton > button {
+    background: var(--gradient-1);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 0.75rem 1.5rem;
+    font-weight: 600;
+    font-family: 'Outfit', sans-serif;
+    transition: all 0.2s ease;
+}
+
+.stButton > button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(99, 102, 241, 0.3);
+}
+
+.stButton > button:active {
+    transform: translateY(0);
+}
+
+/* Secondary buttons */
+.stButton > button[kind="secondary"] {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+}
+
+/* Input fields */
+.stTextInput > div > div > input,
+.stSelectbox > div > div,
+.stDateInput > div > div > input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--text-primary);
+    font-family: 'Outfit', sans-serif;
+}
+
+.stTextInput > div > div > input:focus,
+.stSelectbox > div > div:focus,
+.stDateInput > div > div > input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+/* Chat interface */
+.chat-message {
+    display: flex;
+    gap: 1rem;
+    padding: 1.25rem;
+    border-radius: 16px;
+    margin-bottom: 1rem;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.chat-message.user {
+    background: var(--surface-light);
+    margin-left: 2rem;
+}
+
+.chat-message.assistant {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    margin-right: 2rem;
+}
+
+.chat-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    flex-shrink: 0;
+}
+
+.chat-avatar.user {
+    background: var(--gradient-1);
+}
+
+.chat-avatar.assistant {
+    background: var(--gradient-2);
+}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {
+    background: var(--surface);
+    border-radius: 16px;
+    padding: 0.5rem;
+    gap: 0.5rem;
+}
+
+.stTabs [data-baseweb="tab"] {
+    border-radius: 12px;
+    padding: 0.75rem 1.5rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.stTabs [aria-selected="true"] {
+    background: var(--gradient-1);
+    color: white;
+}
+
+/* Data tables */
+.stDataFrame {
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+}
+
+/* Expanders */
+.streamlit-expanderHeader {
+    background: var(--surface);
+    border-radius: 12px;
+    font-weight: 500;
+}
+
+/* Progress bars */
+.stProgress > div > div {
+    background: var(--gradient-1);
+    border-radius: 8px;
+}
+
+/* Alerts and info boxes */
+.stAlert {
+    border-radius: 12px;
+    border: none;
+}
+
+/* Plotly chart containers */
+.js-plotly-plot {
+    border-radius: 16px;
+    overflow: hidden;
+}
+
+/* Workout plan cards */
+.workout-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+    transition: all 0.2s ease;
+}
+
+.workout-card:hover {
+    border-color: var(--primary);
+    box-shadow: 0 8px 25px rgba(99, 102, 241, 0.1);
+}
+
+.workout-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.workout-card-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.workout-card-badge {
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.badge-running {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+}
+
+.badge-strength {
+    background: rgba(99, 102, 241, 0.2);
+    color: #6366f1;
+}
+
+.badge-rest {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+}
+
+/* Calendar view */
+.calendar-day {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem;
+    min-height: 100px;
+    transition: all 0.2s ease;
+}
+
+.calendar-day:hover {
+    border-color: var(--primary-light);
+}
+
+.calendar-day.today {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+.calendar-day.has-workout {
+    background: linear-gradient(135deg, var(--surface) 0%, rgba(99, 102, 241, 0.1) 100%);
+}
+
+/* Insights cards */
+.insight-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+}
+
+.insight-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 4px;
+    height: 100%;
+    background: var(--gradient-1);
+}
+
+.insight-card.positive::before {
+    background: var(--gradient-2);
+}
+
+.insight-card.warning::before {
+    background: var(--gradient-3);
+}
+
+/* Stats grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+/* Loading spinner override */
+.stSpinner > div {
+    border-color: var(--primary) transparent transparent transparent;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--surface);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+    .main .block-container {
+        padding: 1rem;
+    }
+    
+    h1 {
+        font-size: 1.75rem;
+    }
+    
+    .chat-message.user {
+        margin-left: 0;
+    }
+    
+    .chat-message.assistant {
+        margin-right: 0;
+    }
+}
+
+/* Animation utilities */
+.fade-in {
+    animation: fadeIn 0.3s ease;
+}
+
+.slide-up {
+    animation: slideUp 0.4s ease;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Glass morphism effect */
+.glass {
+    background: rgba(26, 26, 46, 0.8);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Gradient text utility */
+.gradient-text {
+    background: var(--gradient-1);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}

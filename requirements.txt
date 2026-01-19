@@ -1,0 +1,37 @@
+# Backend API
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# Core framework (legacy)
+streamlit==1.40.0
+
+# Garmin Connect API
+garminconnect>=0.2.38
+garth>=0.5.17
+
+# AI - Google Gemini
+google-generativeai==0.8.3
+
+# Data processing
+pandas==2.2.3
+numpy==1.26.4
+
+# Data visualization
+plotly==5.24.1
+altair==5.4.1
+
+# Database
+sqlalchemy==2.0.36
+aiosqlite==0.20.0
+
+# Utilities
+python-dotenv==1.0.1
+pydantic==2.10.2
+pydantic-settings==2.6.1
+httpx==0.28.0
+
+# Date handling
+python-dateutil==2.9.0
+
+# Export functionality
+openpyxl==3.1.5

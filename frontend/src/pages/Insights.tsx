@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
@@ -28,9 +28,34 @@ import {
 import { aiAPI, healthAPI } from '@/lib/api'
 import { cn, getScoreColor, getScoreBgColor } from '@/lib/utils'
 
+// Helper to get/set insights from localStorage
+const INSIGHTS_STORAGE_KEY = 'orktrack_insights'
+
+const loadInsightsFromStorage = (): Record<string, any> => {
+  try {
+    const stored = localStorage.getItem(INSIGHTS_STORAGE_KEY)
+    return stored ? JSON.parse(stored) : {}
+  } catch {
+    return {}
+  }
+}
+
+const saveInsightsToStorage = (period: string, data: any) => {
+  try {
+    const existing = loadInsightsFromStorage()
+    existing[period] = { ...data, savedAt: new Date().toISOString() }
+    localStorage.setItem(INSIGHTS_STORAGE_KEY, JSON.stringify(existing))
+  } catch (e) {
+    console.error('Failed to save insights:', e)
+  }
+}
+
 export default function Insights() {
   const [period, setPeriod] = useState<'day' | 'week' | 'month'>('week')
-  const [insights, setInsights] = useState<any>(null)
+  
+  // Load insights from localStorage on mount and period change
+  const [allInsights, setAllInsights] = useState<Record<string, any>>(() => loadInsightsFromStorage())
+  const insights = allInsights[period] || null
 
   const { data: summary } = useQuery({
     queryKey: ['health-summary', period],
@@ -39,7 +64,12 @@ export default function Insights() {
 
   const generateMutation = useMutation({
     mutationFn: () => aiAPI.generateInsights(period),
-    onSuccess: (data) => setInsights(data),
+    onSuccess: (data) => {
+      // Save to localStorage
+      saveInsightsToStorage(period, data)
+      // Update local state
+      setAllInsights(prev => ({ ...prev, [period]: { ...data, savedAt: new Date().toISOString() } }))
+    },
   })
 
   const highlightIcons: Record<string, React.ReactNode> = {
@@ -136,7 +166,7 @@ export default function Insights() {
           <h3 className="text-xl font-semibold mb-2">Generate AI Insights</h3>
           <p className="text-muted-foreground mb-6 max-w-md mx-auto">
             Get personalized health insights based on your Garmin data analysis
-            for the last {period === 'week' ? '7 days' : '30 days'}.
+            for {period === 'day' ? 'today' : period === 'week' ? 'the last 7 days' : 'the last 30 days'}.
           </p>
           <motion.button
             whileHover={{ scale: 1.02 }}
@@ -173,17 +203,32 @@ export default function Insights() {
             className="p-6 rounded-2xl bg-card border border-border"
           >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">Overall Health Score</h3>
+              <div>
+                <h3 className="text-lg font-semibold">Overall Health Score</h3>
+                {insights.savedAt && (
+                  <p className="text-xs text-muted-foreground">
+                    Generated {new Date(insights.savedAt).toLocaleDateString()} at {new Date(insights.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                )}
+              </div>
               <button
                 onClick={() => generateMutation.mutate()}
-                className="p-2 rounded-lg hover:bg-muted transition-colors"
+                disabled={generateMutation.isPending}
+                className={cn(
+                  'px-4 py-2 rounded-lg flex items-center gap-2 transition-colors',
+                  'bg-primary/10 hover:bg-primary/20 text-primary',
+                  generateMutation.isPending && 'opacity-50'
+                )}
               >
                 <RefreshCw
                   className={cn(
-                    'w-5 h-5',
+                    'w-4 h-4',
                     generateMutation.isPending && 'animate-spin'
                   )}
                 />
+                <span className="text-sm font-medium">
+                  {generateMutation.isPending ? 'Regenerating...' : 'Regenerate'}
+                </span>
               </button>
             </div>
             <div className="flex items-center gap-6">

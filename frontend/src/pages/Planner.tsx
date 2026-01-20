@@ -559,6 +559,111 @@ export default function Planner() {
   )
 }
 
+// Send to Garmin Section Component
+function SendToGarminSection({ plan, planType }: { plan: any, planType: 'week' | 'month' }) {
+  const [sendingWorkout, setSendingWorkout] = useState<string | null>(null)
+  const [sentWorkouts, setSentWorkouts] = useState<Set<string>>(new Set())
+  const [sendingAll, setSendingAll] = useState(false)
+
+  // Extract workouts
+  let workouts: any[] = []
+  if (planType === 'week') {
+    workouts = plan.workouts || []
+  } else if (plan.weeks && Array.isArray(plan.weeks)) {
+    workouts = plan.weeks.flatMap((w: any) => w.workouts || [])
+  }
+
+  const handleSendWorkout = async (workout: any, idx: number) => {
+    const workoutId = `workout-${idx}`
+    setSendingWorkout(workoutId)
+    try {
+      await workoutsAPI.sendToGarmin({
+        workout_name: workout.title || `Day ${idx + 1}`,
+        workout_type: workout.type || 'running',
+        duration_minutes: workout.duration_minutes || 30,
+        steps: workout.steps || [],
+        description: workout.description,
+      })
+      setSentWorkouts(prev => new Set(prev).add(workoutId))
+    } catch (err) {
+      console.error('Failed to send workout:', err)
+    } finally {
+      setSendingWorkout(null)
+    }
+  }
+
+  const handleSendAll = async () => {
+    setSendingAll(true)
+    for (let i = 0; i < workouts.length; i++) {
+      const workout = workouts[i]
+      if (workout.type === 'rest') continue
+      await handleSendWorkout(workout, i)
+    }
+    setSendingAll(false)
+  }
+
+  const runnableWorkouts = workouts.filter((w: any) => w.type !== 'rest')
+
+  if (runnableWorkouts.length === 0) return null
+
+  return (
+    <div className="p-4 rounded-xl bg-muted/30 border border-border space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Send className="w-4 h-4 text-primary" />
+          <span className="text-sm font-semibold">Send to Garmin</span>
+        </div>
+        <button
+          onClick={handleSendAll}
+          disabled={sendingAll}
+          className={cn(
+            'px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2',
+            'bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors',
+            sendingAll && 'opacity-50'
+          )}
+        >
+          {sendingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          Send All Workouts
+        </button>
+      </div>
+      
+      <div className="flex flex-wrap gap-2">
+        {workouts.map((workout: any, idx: number) => {
+          const workoutId = `workout-${idx}`
+          const isSent = sentWorkouts.has(workoutId)
+          const isSending = sendingWorkout === workoutId
+          const isRest = workout.type === 'rest'
+          
+          if (isRest) return null
+          
+          return (
+            <button
+              key={workoutId}
+              onClick={() => handleSendWorkout(workout, idx)}
+              disabled={isSending || isSent}
+              className={cn(
+                'px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all',
+                isSent 
+                  ? 'bg-green-500/20 text-green-400'
+                  : 'bg-card border border-border hover:bg-muted'
+              )}
+            >
+              {isSending ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : isSent ? (
+                <Check className="w-3 h-3" />
+              ) : (
+                <Send className="w-3 h-3" />
+              )}
+              Day {idx + 1}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // Generated Plan Preview Component
 function GeneratedPlanPreview({
   plan,
@@ -635,6 +740,9 @@ function GeneratedPlanPreview({
           </button>
         </div>
       </div>
+
+      {/* Send to Garmin Section */}
+      <SendToGarminSection plan={plan} planType={planType} />
 
       {(plan.rationale || plan.mesocycle_overview) && (
         <p className="text-sm text-muted-foreground bg-muted/50 p-3 rounded-lg">
@@ -867,17 +975,42 @@ function WorkoutCard({
               
               {/* Supplementary Activities */}
               {workout.supplementary && workout.supplementary.length > 0 && (
-                <div className="space-y-1">
-                  <p className="text-xs font-semibold opacity-70 uppercase tracking-wide">Supplementary</p>
-                  <div className="flex flex-wrap gap-2">
-                    {workout.supplementary.map((supp: any, idx: number) => (
-                      <span
-                        key={idx}
-                        className="text-xs px-2 py-1 rounded-full bg-purple-500/20 text-purple-300"
-                      >
-                        {supp.activity} ({supp.timing}) - {supp.duration_minutes}m
-                      </span>
-                    ))}
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-orange-400 uppercase tracking-wide">+ Supplementary Activities</p>
+                  <div className="space-y-2">
+                    {workout.supplementary.map((supp: any, idx: number) => {
+                      const activityName = supp.activity?.toLowerCase() || supp.type?.toLowerCase() || ''
+                      const icon = activityName.includes('wim') || activityName.includes('breath') ? '🧘‍♂️' :
+                                   activityName.includes('mobility') ? '🔄' :
+                                   activityName.includes('yoga') || activityName.includes('stretch') ? '🧘' :
+                                   activityName.includes('cold') || activityName.includes('plunge') ? '❄️' :
+                                   activityName.includes('gym') || activityName.includes('strength') ? '🏋️' :
+                                   activityName.includes('sauna') ? '🔥' : '✨'
+                      const displayName = supp.activity || supp.type || 'Activity'
+                      
+                      return (
+                        <div
+                          key={idx}
+                          className="p-3 rounded-lg bg-slate-800/50 border border-slate-700/50"
+                        >
+                          <div className="flex items-start gap-3">
+                            <span className="text-xl">{icon}</span>
+                            <div className="flex-1">
+                              <p className="font-semibold text-sm">{displayName}</p>
+                              <p className="text-xs text-muted-foreground flex items-center gap-2">
+                                <span className="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
+                                  {supp.timing || 'Flexible'}
+                                </span>
+                                <span>• {supp.duration_minutes || supp.duration || '15'} min</span>
+                              </p>
+                              {supp.notes && (
+                                <p className="text-xs text-orange-300/80 mt-1">{supp.notes}</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -1064,16 +1197,35 @@ function ListView({
 
                           {workout.supplementary && workout.supplementary.length > 0 && (
                             <div>
-                              <p className="text-xs font-semibold text-muted-foreground mb-2">SUPPLEMENTARY</p>
-                              <div className="flex flex-wrap gap-2">
-                                {workout.supplementary.map((sup: any, idx: number) => (
-                                  <span key={idx} className="px-2 py-1 rounded bg-muted text-xs">
-                                    {sup.type || sup.activity} • {sup.timing}
-                                  </span>
-                                ))}
+                              <p className="text-xs font-semibold text-orange-400 mb-2">+ SUPPLEMENTARY ACTIVITIES</p>
+                              <div className="grid grid-cols-2 gap-2">
+                                {workout.supplementary.map((sup: any, idx: number) => {
+                                  const activityName = (sup.type || sup.activity || '').toLowerCase()
+                                  const icon = activityName.includes('wim') || activityName.includes('breath') ? '🧘‍♂️' :
+                                               activityName.includes('mobility') ? '🔄' :
+                                               activityName.includes('yoga') || activityName.includes('stretch') ? '🧘' :
+                                               activityName.includes('cold') || activityName.includes('plunge') ? '❄️' :
+                                               activityName.includes('gym') || activityName.includes('strength') ? '🏋️' :
+                                               activityName.includes('sauna') ? '🔥' : '✨'
+                                  
+                                  return (
+                                    <div key={idx} className="p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 flex items-center gap-2">
+                                      <span className="text-lg">{icon}</span>
+                                      <div>
+                                        <p className="text-xs font-medium">{sup.type || sup.activity}</p>
+                                        <p className="text-xs text-muted-foreground">{sup.timing} • {sup.duration || sup.duration_minutes || 15}min</p>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
                               </div>
                             </div>
                           )}
+                          
+                          {/* Send to Garmin Button */}
+                          <div className="flex gap-2 pt-2 border-t border-border">
+                            <SendWorkoutButton workout={workout} />
+                          </div>
                         </div>
                       </motion.div>
                     )}
@@ -1085,5 +1237,51 @@ function ListView({
         </div>
       ))}
     </div>
+  )
+}
+
+// Individual Send to Garmin Button
+function SendWorkoutButton({ workout }: { workout: any }) {
+  const [sending, setSending] = useState(false)
+  const [sent, setSent] = useState(false)
+
+  const handleSend = async () => {
+    setSending(true)
+    try {
+      await workoutsAPI.sendToGarmin({
+        workout_name: workout.title || 'Workout',
+        workout_type: workout.workout_type || 'running',
+        duration_minutes: workout.duration_minutes || 30,
+        steps: workout.exercises || [],
+        description: workout.description,
+      })
+      setSent(true)
+    } catch (err) {
+      console.error('Failed to send workout:', err)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <button
+      onClick={handleSend}
+      disabled={sending || sent}
+      className={cn(
+        'flex-1 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-all',
+        sent
+          ? 'bg-green-500/20 text-green-400'
+          : 'bg-primary/10 text-primary hover:bg-primary/20'
+      )}
+    >
+      {sending ? (
+        <Loader2 className="w-4 h-4 animate-spin" />
+      ) : sent ? (
+        <Check className="w-4 h-4" />
+      ) : (
+        <Send className="w-4 h-4" />
+      )}
+      {sent ? 'Sent to Garmin' : 'Send to Garmin'}
+    </button>
   )
 }

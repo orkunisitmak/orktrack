@@ -577,12 +577,23 @@ function SendToGarminSection({ plan, planType }: { plan: any, planType: 'week' |
     const workoutId = `workout-${idx}`
     setSendingWorkout(workoutId)
     try {
+      // Map workout steps to the format expected by backend
+      const formattedSteps = (workout.steps || []).map((step: any) => ({
+        type: step.type || 'active',
+        duration_minutes: step.duration_minutes || null,
+        distance_meters: step.distance_meters || null,
+        target_type: step.target_pace_min ? 'pace' : 'open',
+        target_pace_min: step.target_pace_min || null,
+        target_pace_max: step.target_pace_max || null,
+        description: step.description || '',
+      }))
+      
       await workoutsAPI.sendToGarmin({
-        workout_name: workout.title || `Day ${idx + 1}`,
-        workout_type: workout.type || 'running',
+        title: workout.title || `Day ${idx + 1}`,
+        type: workout.type || 'running',
         duration_minutes: workout.duration_minutes || 30,
-        steps: workout.steps || [],
-        description: workout.description,
+        steps: formattedSteps,
+        description: workout.description || workout.title || 'Training workout',
       })
       setSentWorkouts(prev => new Set(prev).add(workoutId))
     } catch (err) {
@@ -1318,12 +1329,24 @@ function SendWorkoutButton({ workout }: { workout: any }) {
   const handleSend = async () => {
     setSending(true)
     try {
+      // Map workout steps/exercises to the format expected by backend
+      const steps = workout.exercises || workout.steps || []
+      const formattedSteps = steps.map((step: any) => ({
+        type: step.type || 'active',
+        duration_minutes: step.duration_minutes || null,
+        distance_meters: step.distance_meters || null,
+        target_type: step.target_pace_min ? 'pace' : 'open',
+        target_pace_min: step.target_pace_min || null,
+        target_pace_max: step.target_pace_max || null,
+        description: step.description || '',
+      }))
+      
       await workoutsAPI.sendToGarmin({
-        workout_name: workout.title || 'Workout',
-        workout_type: workout.workout_type || 'running',
+        title: workout.title || 'Workout',
+        type: workout.workout_type || workout.type || 'running',
         duration_minutes: workout.duration_minutes || 30,
-        steps: workout.exercises || [],
-        description: workout.description,
+        steps: formattedSteps,
+        description: workout.description || workout.title || 'Training workout',
       })
       setSent(true)
     } catch (err) {

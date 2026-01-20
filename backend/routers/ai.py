@@ -614,8 +614,30 @@ async def generate_insights(request: InsightRequest):
         raw_data = {}
         try:
             raw_data = garmin.get_comprehensive_data(days=days)
+            
+            # Debug: Log activities being passed to insights
+            activities = raw_data.get("activities", [])
+            print(f"[Insights] Period: {request.period} ({days} days)")
+            print(f"[Insights] Total activities: {len(activities)}")
+            
+            # Log activity types breakdown
+            activity_types = {}
+            for a in activities:
+                act_type = a.get("classifiedType") or a.get("activityType", {}).get("typeKey", "other")
+                if isinstance(a.get("activityType"), dict):
+                    act_type = a.get("classifiedType") or a["activityType"].get("typeKey", "other")
+                activity_types[act_type] = activity_types.get(act_type, 0) + 1
+            print(f"[Insights] Activity types: {activity_types}")
+            
+            # Log first few activities for debugging
+            for i, a in enumerate(activities[:5]):
+                name = a.get("activityName", "Unknown")
+                duration = (a.get("duration", 0) or 0) / 60
+                print(f"[Insights] Activity {i+1}: '{name}' - {duration:.0f}min")
+                
         except Exception as e:
             print(f"Error getting comprehensive data: {e}")
+            traceback.print_exc()
             raw_data = {
                 "health_summary": garmin.get_health_metrics_for_ai(days=days),
                 "sleep_data": [],
@@ -820,7 +842,6 @@ async def analyze_activity(
             
         except Exception as e:
             print(f"Error getting comprehensive data, falling back to basic: {e}")
-            import traceback
             traceback.print_exc()
             activity = garmin.get_activity_details(activity_id)
             activity_details = {}

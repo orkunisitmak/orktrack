@@ -353,9 +353,16 @@ Analyze the provided comprehensive health telemetry and provide detailed, action
       "high_percentage": Number
     },
     "activity_breakdown": {"activity_type": count},
+    "wellness_activities": {
+      "yoga_sessions": Number,
+      "cold_plunge_sessions": Number,
+      "breathing_sessions": Number,
+      "other_wellness": Number,
+      "wellness_assessment": "String - assessment of recovery/wellness practices"
+    },
     "training_load_status": "Optimal | High | Low | Recovery Needed",
-    "insights": ["String"],
-    "recommendations": ["String"]
+    "insights": ["String - include insights about ALL activity types including wellness"],
+    "recommendations": ["String - include recommendations for both training AND recovery activities"]
   },
   "recovery_analysis": {
     "status": "Excellent | Good | Fair | Needs Attention",
@@ -444,6 +451,40 @@ Analyze the provided comprehensive health telemetry and provide detailed, action
         # Format activity breakdown
         activity_breakdown_str = ", ".join([f"{k}: {v}" for k, v in sorted(activity_breakdown.items(), key=lambda x: x[1], reverse=True)[:5]]) or "N/A"
         
+        # Format detailed activity list with ALL activities including wellness
+        detailed_activities_list = ""
+        if activities:
+            for i, a in enumerate(activities[:30], 1):  # Show up to 30 activities
+                act_name = a.get("activityName", "Unnamed")
+                act_type = a.get("classifiedType") or a.get("classifiedTypeName") or a.get("activityType", {}).get("typeKey", "other")
+                if isinstance(a.get("activityType"), dict):
+                    act_type = a.get("classifiedType") or a["activityType"].get("typeKey", "other")
+                
+                duration_mins = (a.get("duration", 0) or 0) / 60
+                distance_km = (a.get("distance", 0) or 0) / 1000
+                avg_hr = a.get("averageHR") or a.get("avgHR") or "N/A"
+                max_hr = a.get("maxHR") or "N/A"
+                calories = a.get("calories") or "N/A"
+                training_effect = a.get("aerobicTrainingEffect") or a.get("trainingEffectAerobic") or "N/A"
+                start_time = a.get("startTimeLocal", "")[:10] if a.get("startTimeLocal") else "Unknown date"
+                
+                # Determine if it's a wellness/recovery activity
+                is_wellness = act_type in ['yoga', 'cold_plunge', 'breathing', 'meditation', 'sauna', 'stretching', 'other'] or \
+                              any(kw in act_name.lower() for kw in ['yoga', 'cold', 'plunge', 'breath', 'meditat', 'stretch', 'sauna'])
+                
+                activity_label = f"[WELLNESS] " if is_wellness else ""
+                
+                detailed_activities_list += f"""
+{i}. {activity_label}**{act_name}** ({act_type})
+   - Date: {start_time}
+   - Duration: {duration_mins:.0f} min
+   - Distance: {distance_km:.1f} km
+   - Avg HR: {avg_hr} bpm | Max HR: {max_hr} bpm
+   - Calories: {calories} | Training Effect: {training_effect}
+"""
+        else:
+            detailed_activities_list = "No activities recorded in this period."
+        
         user_prompt = f"""### USER CONTEXT
 **Profile:**
 - Name: {user_profile.get('displayName', 'Athlete')}
@@ -486,15 +527,23 @@ Analyze the provided comprehensive health telemetry and provide detailed, action
 - Average Light Sleep: {avg_light:.1f} hours ({(avg_light/avg_sleep*100) if avg_sleep > 0 else 0:.0f}%)
 
 ---
-### ACTIVITY ANALYSIS ({total_activities} workouts)
+### ACTIVITY SUMMARY ({total_activities} activities)
 
 - Total Workout Duration: {total_duration:.0f} minutes ({total_duration/60:.1f} hours)
 - Total Distance: {total_distance:.1f} km
 - Total Workout Calories: {total_calories:,}
 - Average Workout HR: {avg_workout_hr:.0f} bpm
 - Average Training Effect: {avg_training_effect:.1f}/5.0
-- Activity Breakdown: {activity_breakdown_str}
+- Activity Type Breakdown: {activity_breakdown_str}
 - Most Common Type: {_get_most_common_activity(activities)}
+
+---
+### DETAILED ACTIVITY LOG (ALL ACTIVITIES IN PERIOD)
+
+**IMPORTANT:** Analyze ALL activities below including wellness activities (yoga, cold plunge, breathing, etc.)
+Wellness activities are marked with [WELLNESS] - these contribute to recovery and mental health.
+
+{detailed_activities_list}
 
 ---
 ### PERFORMANCE METRICS
@@ -517,9 +566,23 @@ Analyze the provided comprehensive health telemetry and provide detailed, action
 
 ---
 ### INSTRUCTION
-Analyze the health data and generate comprehensive insights following the JSON schema.
-Focus on actionable recommendations that will help improve overall fitness and well-being.
+Analyze ALL the health data above and generate comprehensive insights following the JSON schema.
+
+**CRITICAL - ANALYZE ALL ACTIVITIES:**
+1. Review EVERY activity in the detailed activity log above
+2. Include wellness activities (yoga, cold plunge, breathing, etc.) in your analysis
+3. Recognize that wellness activities contribute to recovery even if they don't have high training effect
+4. Count and acknowledge each activity type when generating activity_breakdown and wellness_activities
+
+**Focus Areas:**
+- Training volume and intensity patterns
+- Recovery practices (cold plunge, yoga, breathing are POSITIVE for recovery)
+- Sleep quality and consistency
+- Stress management and body battery trends
+- Actionable recommendations for improvement
+
 Be encouraging but honest about areas needing improvement.
+Reference specific activities by name when relevant.
 
 Generate the JSON insights now."""
 

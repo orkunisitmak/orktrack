@@ -2,6 +2,7 @@
 
 import os
 import re
+import traceback
 from datetime import date, datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pathlib import Path
@@ -1276,7 +1277,6 @@ class GarminService:
             return {"success": True, "message": "Workout uploaded"}
             
         except Exception as e:
-            import traceback
             return {"error": str(e), "details": traceback.format_exc(), "success": False}
     
     def _build_typed_garmin_step(self, step: Dict[str, Any], order: int):
@@ -1735,11 +1735,13 @@ class GarminService:
         }
         
         try:
-            # Fetch activities with enriched details
+            # Fetch activities with enriched details (already enriched in get_activities_by_date)
             activities = self.get_activities_by_date(start_date, end_date)
-            data["activities"] = [self.enrich_activity(a) for a in activities]
-        except Exception:
-            pass
+            data["activities"] = activities
+            print(f"[Comprehensive Data] Fetched {len(activities)} activities from {start_date} to {end_date}")
+        except Exception as e:
+            print(f"[Comprehensive Data] Error fetching activities: {e}")
+            traceback.print_exc()
         
         try:
             # Fetch daily stats for recent days (limit to avoid rate limiting)

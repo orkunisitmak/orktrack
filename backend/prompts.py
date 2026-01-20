@@ -1049,12 +1049,27 @@ When the user includes supplementary activities, schedule them with OPTIMAL TIMI
       "steps": [
         {
           "type": "warmup | work | recovery | cooldown",
-          "description": "Step with SPECIFIC PACE",
-          "duration_value": "e.g., '10:00' or '800m'",
-          "target_pace_min": "min/km (REQUIRED for run workouts)",
-          "target_pace_max": "min/km (REQUIRED for run workouts)",
+          "description": "Step with SPECIFIC PACE (e.g., 'Easy Jog', 'Threshold', 'Recovery Jog')",
+          "duration_minutes": Number (REQUIRED - duration in minutes),
+          "distance_meters": Number (REQUIRED for distance-based steps, e.g., 2000 for 2km),
+          "target_pace_min": "min/km (REQUIRED for run workouts, e.g., '4:50')",
+          "target_pace_max": "min/km (REQUIRED for run workouts, e.g., '4:55')",
           "target_hr_bpm": "e.g., 150-160 bpm" (optional)
         }
+      ],
+      "// CRITICAL STEPS RULES": [
+        "1. EVERY step MUST have either duration_minutes OR distance_meters (or both)",
+        "2. For INTERVALS (e.g., 3x2km): Create SEPARATE steps for each repeat and recovery",
+        "   Example for 3x2km @ T-Pace with 400m recovery:",
+        "   - {type: 'work', description: 'Threshold Interval 1', distance_meters: 2000, target_pace_min: '4:50', target_pace_max: '4:55'}",
+        "   - {type: 'recovery', description: 'Recovery Jog', distance_meters: 400, target_pace_min: '6:00', target_pace_max: '6:30'}",
+        "   - {type: 'work', description: 'Threshold Interval 2', distance_meters: 2000, ...}",
+        "   - {type: 'recovery', description: 'Recovery Jog', distance_meters: 400, ...}",
+        "   - {type: 'work', description: 'Threshold Interval 3', distance_meters: 2000, ...}",
+        "3. Warmup/Cooldown: Use duration_minutes (e.g., 10 minutes)",
+        "4. Long runs/Easy runs: Use duration_minutes",
+        "5. Tempo/Threshold: Use either duration_minutes OR distance_meters",
+        "6. Track intervals (400m, 800m, 1km, 2km): Use distance_meters"
       ],
       "supplementary": [
         {
@@ -1150,7 +1165,15 @@ Current Date: {datetime.now().strftime('%A, %B %d, %Y')}
 4. Ensure 80/20 polarized distribution across the week
 5. Include 1-2 complete rest or recovery days
 6. Address any load focus issues (e.g., Anaerobic Shortage)
-7. **SUPPLEMENTARY ACTIVITIES ARE MANDATORY:**
+7. **CRITICAL - WORKOUT STEPS STRUCTURE:**
+   - EVERY step MUST have duration_minutes (e.g., 10) AND/OR distance_meters (e.g., 2000 for 2km)
+   - For INTERVAL workouts: Create SEPARATE steps for EACH repeat and recovery period
+   - Example: "3x2km @ T-Pace" becomes 6 steps: work-recovery-work-recovery-work (no trailing recovery)
+   - Warmup/Cooldown: Use duration_minutes (e.g., 10)
+   - Track intervals (400m, 800m, 1km, 2km): Use distance_meters
+   - Tempo runs: Use duration_minutes OR distance_meters
+   - DO NOT use shorthand like "3x2km" in a single step - expand into separate steps
+8. **SUPPLEMENTARY ACTIVITIES ARE MANDATORY:**
    - Each workout's "supplementary" array MUST include ALL activities scheduled for that day
    - If user requested 7x/week for an activity, it MUST appear in ALL 7 days
    - Even REST days should include the appropriate supplementary activities
@@ -1317,13 +1340,36 @@ ALL running workouts MUST have exact paces from VDOT - no vague descriptions.
   "intensity": "low | moderate | high",
   "description": "Detailed description with SPECIFIC PACES for running",
   "target_hr_zone": "Zone X-Y",
+  "key_focus": "Primary training benefit",
   "steps": [
-    {"type": "warmup|work|recovery|cooldown", "description": "...", "duration_minutes": N, "target_pace_min": "X:XX", "target_pace_max": "X:XX"}
+    {
+      "type": "warmup|work|recovery|cooldown",
+      "description": "Step description (e.g., 'Easy Jog', 'Threshold', 'Recovery Jog')",
+      "duration_minutes": Number (REQUIRED for time-based steps),
+      "distance_meters": Number (REQUIRED for distance-based steps, e.g., 2000 for 2km),
+      "target_pace_min": "X:XX (REQUIRED for running)",
+      "target_pace_max": "X:XX (REQUIRED for running)"
+    }
   ],
   "supplementary": [
     {"activity": "wim_hof|mobility|yoga|cold_plunge|gym", "timing": "morning|pre_workout|post_workout|evening", "duration_minutes": N, "notes": "..."}
   ]
 }
+
+### CRITICAL - WORKOUT STEPS RULES:
+1. EVERY step MUST have either "duration_minutes" OR "distance_meters" (or both)
+2. For INTERVAL workouts (e.g., 3x2km @ T-Pace): Create SEPARATE steps for EACH repeat and recovery:
+   - Step 1: {type: "warmup", description: "Easy Jog", duration_minutes: 10, target_pace_min: "5:50", target_pace_max: "6:10"}
+   - Step 2: {type: "work", description: "Threshold Interval 1", distance_meters: 2000, target_pace_min: "4:50", target_pace_max: "4:55"}
+   - Step 3: {type: "recovery", description: "Recovery Jog", distance_meters: 400, target_pace_min: "6:00", target_pace_max: "6:30"}
+   - Step 4: {type: "work", description: "Threshold Interval 2", distance_meters: 2000, target_pace_min: "4:50", target_pace_max: "4:55"}
+   - Step 5: {type: "recovery", description: "Recovery Jog", distance_meters: 400, target_pace_min: "6:00", target_pace_max: "6:30"}
+   - Step 6: {type: "work", description: "Threshold Interval 3", distance_meters: 2000, target_pace_min: "4:50", target_pace_max: "4:55"}
+   - Step 7: {type: "cooldown", description: "Easy Jog", duration_minutes: 10, target_pace_min: "5:50", target_pace_max: "6:10"}
+3. DO NOT use shorthand like "3x2km" in a single step - expand into separate steps
+4. Warmup/Cooldown: Use duration_minutes
+5. Track intervals (400m, 800m, 1km, 2km): Use distance_meters
+6. Tempo/Long runs: Use either duration_minutes OR distance_meters
 """
 
         user_prompt = f"""### USER CONTEXT

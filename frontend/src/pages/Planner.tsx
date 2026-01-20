@@ -946,14 +946,28 @@ function WorkoutCard({
                   <p className="text-xs font-semibold opacity-70 uppercase tracking-wide">Workout Steps</p>
                   <div className="space-y-1">
                     {workout.steps.map((step: any, idx: number) => {
-                      // Build duration/distance string
+                      // Build duration/distance string - prioritize distance_meters for track work
                       const metrics: string[] = []
-                      if (step.duration_minutes) metrics.push(`${step.duration_minutes} min`)
-                      if (step.duration) metrics.push(step.duration)
-                      if (step.distance_meters) metrics.push(`${step.distance_meters}m`)
-                      if (step.distance_km) metrics.push(`${step.distance_km}km`)
-                      if (step.distance) metrics.push(step.distance)
-                      if (step.repeats) metrics.push(`${step.repeats}x`)
+                      if (step.distance_meters) {
+                        metrics.push(step.distance_meters >= 1000 
+                          ? `${(step.distance_meters / 1000).toFixed(1)}km` 
+                          : `${step.distance_meters}m`)
+                      } else if (step.distance_km) {
+                        metrics.push(`${step.distance_km}km`)
+                      } else if (step.duration_minutes) {
+                        metrics.push(`${step.duration_minutes} min`)
+                      } else if (step.duration) {
+                        metrics.push(step.duration)
+                      } else if (step.distance) {
+                        metrics.push(step.distance)
+                      }
+                      
+                      // Build pace string
+                      const paceStr = step.target_pace_min && step.target_pace_max 
+                        ? `${step.target_pace_min}-${step.target_pace_max}/km`
+                        : step.target_pace 
+                          ? `@ ${step.target_pace}`
+                          : ''
                       
                       return (
                         <div
@@ -971,15 +985,15 @@ function WorkoutCard({
                             <span className="font-semibold capitalize">{step.type}</span>
                             <span className="opacity-80">{step.description}</span>
                           </div>
-                          <div className="flex items-center gap-2 font-medium">
+                          <div className="flex items-center gap-3 font-medium">
                             {metrics.length > 0 && (
                               <span className="px-2 py-0.5 rounded bg-white/10">
-                                {metrics.join(' / ')}
+                                {metrics.join(' ')}
                               </span>
                             )}
-                            {(step.target_pace_min || step.target_pace) && (
+                            {paceStr && (
                               <span className="opacity-70">
-                                {step.target_pace || `${step.target_pace_min}-${step.target_pace_max}/km`}
+                                {paceStr}
                               </span>
                             )}
                           </div>
@@ -1193,16 +1207,28 @@ function ListView({
                               <p className="text-xs font-semibold text-muted-foreground mb-2">WORKOUT STRUCTURE</p>
                               <div className="space-y-1">
                                 {workout.exercises.map((step: any, idx: number) => {
-                                  // Build duration/distance string
-                                  const durationParts: string[] = []
-                                  if (step.duration_minutes) durationParts.push(`${step.duration_minutes} min`)
-                                  if (step.duration) durationParts.push(step.duration)
-                                  if (step.distance_meters) durationParts.push(`${step.distance_meters}m`)
-                                  if (step.distance_km) durationParts.push(`${step.distance_km}km`)
-                                  if (step.distance) durationParts.push(step.distance)
-                                  if (step.repeats) durationParts.push(`${step.repeats}x`)
+                                  // Build duration/distance string - prioritize distance_meters for track work
+                                  const metrics: string[] = []
+                                  if (step.distance_meters) {
+                                    metrics.push(step.distance_meters >= 1000 
+                                      ? `${(step.distance_meters / 1000).toFixed(1)}km` 
+                                      : `${step.distance_meters}m`)
+                                  } else if (step.distance_km) {
+                                    metrics.push(`${step.distance_km}km`)
+                                  } else if (step.duration_minutes) {
+                                    metrics.push(`${step.duration_minutes} min`)
+                                  } else if (step.duration) {
+                                    metrics.push(step.duration)
+                                  } else if (step.distance) {
+                                    metrics.push(step.distance)
+                                  }
                                   
-                                  const durationStr = durationParts.length > 0 ? durationParts.join(' / ') : ''
+                                  // Build pace string
+                                  const paceStr = step.target_pace_min && step.target_pace_max 
+                                    ? `${step.target_pace_min}-${step.target_pace_max}/km`
+                                    : step.target_pace 
+                                      ? `@ ${step.target_pace}`
+                                      : ''
                                   
                                   return (
                                     <div
@@ -1216,16 +1242,22 @@ function ListView({
                                         !['warmup', 'work', 'recovery', 'cooldown'].includes(step.type) && 'bg-muted/50 border-l-4 border-muted'
                                       )}
                                     >
-                                      <div>
+                                      <div className="flex items-center gap-2">
                                         <span className="font-semibold capitalize">{step.type || 'Step'}</span>
-                                        {step.description && <span className="text-muted-foreground ml-2">- {step.description}</span>}
-                                        {step.target_pace && <span className="text-muted-foreground ml-2">@ {step.target_pace}</span>}
+                                        {step.description && <span className="text-muted-foreground">- {step.description}</span>}
                                       </div>
-                                      {durationStr && (
-                                        <span className="text-sm font-medium px-2 py-0.5 rounded bg-white/10">
-                                          {durationStr}
-                                        </span>
-                                      )}
+                                      <div className="flex items-center gap-3">
+                                        {metrics.length > 0 && (
+                                          <span className="text-sm font-semibold px-2 py-0.5 rounded bg-white/10">
+                                            {metrics.join(' ')}
+                                          </span>
+                                        )}
+                                        {paceStr && (
+                                          <span className="text-sm text-muted-foreground">
+                                            {paceStr}
+                                          </span>
+                                        )}
+                                      </div>
                                     </div>
                                   )
                                 })}

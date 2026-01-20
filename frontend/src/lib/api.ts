@@ -98,16 +98,105 @@ export const activitiesAPI = {
 
   getGear: (id: string) => fetchAPI<any>(`/activities/${id}/gear`),
 
-  // Get all details in one call
+  // Get all details in one call (comprehensive)
   getFullDetails: (id: string) =>
     fetchAPI<{
+      activity_id: string
       activity: any
       splits: any
+      typed_splits: any
+      split_summaries: any
       hr_zones: any
       weather: any
       exercise_sets: any
       gear: any
+      metrics: {
+        has_stress: boolean
+        has_respiration: boolean
+        has_performance_condition: boolean
+        has_pace: boolean
+        has_cadence: boolean
+        has_power: boolean
+        has_stride_length: boolean
+        has_stamina: boolean
+      }
+      summary: {
+        name: string
+        type: string
+        duration_seconds: number
+        distance_meters: number
+        calories: number
+        avg_hr: number | null
+        max_hr: number | null
+        avg_speed: number | null
+        max_speed: number | null
+        elevation_gain: number | null
+        elevation_loss: number | null
+        avg_cadence: number | null
+        max_cadence: number | null
+        avg_stride_length: number | null
+        performance_condition: number | null
+        training_effect_aerobic: number | null
+        training_effect_anaerobic: number | null
+        avg_respiration: number | null
+        max_respiration: number | null
+        avg_stress: number | null
+        max_stress: number | null
+        vo2max: number | null
+        avg_power: number | null
+        max_power: number | null
+        normalized_power: number | null
+        training_load: number | null
+        recovery_time: number | null
+        start_time: string | null
+      }
     }>(`/activities/${id}/full`),
+
+  // Get detailed metrics for chart display
+  getMetrics: (id: string) =>
+    fetchAPI<{
+      activity_id: string
+      summary: any
+      available_metrics: {
+        has_stress: boolean
+        has_respiration: boolean
+        has_performance_condition: boolean
+        has_pace: boolean
+        has_cadence: boolean
+        has_power: boolean
+      }
+      weather: any
+      hr_zones: any
+      splits: Array<{
+        lap_number: number
+        duration_seconds: number | null
+        distance_meters: number | null
+        avg_hr: number | null
+        max_hr: number | null
+        avg_speed: number | null
+        avg_cadence: number | null
+        elevation_gain: number | null
+        avg_respiration: number | null
+        avg_stress: number | null
+        pace_min_km: string | null
+      }>
+      charts: {
+        has_data: boolean
+        heart_rate: Array<{ lap: number; value: number; max?: number }>
+        pace: Array<{ lap: number; value: string; speed_ms: number }>
+        cadence: Array<{ lap: number; value: number }>
+        stress: Array<{ lap: number; value: number }>
+        respiration: Array<{ lap: number; value: number }>
+        elevation: Array<{ lap: number; value: number }>
+        power: Array<{ lap: number; value: number }>
+      }
+    }>(`/activities/${id}/metrics`),
+
+  // Get typed splits
+  getTypedSplits: (id: string) => fetchAPI<any>(`/activities/${id}/typed-splits`),
+
+  // Get split summaries
+  getSplitSummaries: (id: string) => fetchAPI<any>(`/activities/${id}/split-summaries`),
 }
 
 // Health API
@@ -159,6 +248,10 @@ export const healthAPI = {
 
   getRespiration: (date: string) => fetchAPI<any>(`/health/respiration/${date}`),
 
+  getStress: (date: string) => fetchAPI<any>(`/health/stress/${date}`),
+
+  getAllDayStress: (date: string) => fetchAPI<any>(`/health/stress/${date}/all-day`),
+
   getSpo2: (date: string) => fetchAPI<any>(`/health/spo2/${date}`),
 
   getHydration: (date: string) => fetchAPI<any>(`/health/hydration/${date}`),
@@ -176,6 +269,30 @@ export const healthAPI = {
   getBadges: () => fetchAPI<any[]>('/health/badges'),
 
   getPersonalRecords: () => fetchAPI<any>('/health/personal-records'),
+
+  // Sync endpoints
+  getSyncStatus: () =>
+    fetchAPI<{
+      sync_status: Record<string, {
+        last_sync_at: string | null
+        last_sync_success: boolean
+        records_synced: number
+        is_stale: boolean
+      }>
+      server_time: string
+    }>('/health/sync/status'),
+
+  syncData: () =>
+    fetchAPI<{
+      success: boolean
+      results: Record<string, {
+        success: boolean
+        count: number
+        error: string | null
+      }>
+      total_time_seconds: number
+      synced_at: string
+    }>('/health/sync', { method: 'POST' }),
 }
 
 // AI API
@@ -235,7 +352,7 @@ export const aiAPI = {
 
   recommendGoals: () => fetchAPI<any>('/ai/recommend-goals'),
 
-  analyzeActivity: (activityId: string) =>
+  analyzeActivity: (activityId: string, regenerate: boolean = false) =>
     fetchAPI<{
       activity_id: string
       analysis: {
@@ -280,6 +397,30 @@ export const aiAPI = {
           anaerobic_rating: string
           anaerobic_insight: string
         }
+        stress_analysis?: {
+          avg_stress: number | null
+          max_stress: number | null
+          stress_during_activity: string
+          stress_management: string
+          insight: string
+        }
+        respiration_analysis?: {
+          avg_respiration: number | null
+          max_respiration: number | null
+          breathing_efficiency: string
+          insight: string
+        }
+        performance_condition_analysis?: {
+          value: number | null
+          interpretation: string
+          insight: string
+        }
+        power_analysis?: {
+          avg_power: number | null
+          normalized_power: number | null
+          power_efficiency: string
+          insight: string
+        }
         key_takeaways: string[]
         recommendations_for_next_time: Array<{
           priority: string
@@ -303,11 +444,25 @@ export const aiAPI = {
         elevation_gain: number
         avg_cadence: number
         start_time: string
+        avg_stress: number | null
+        max_stress: number | null
+        avg_respiration: number | null
+        max_respiration: number | null
+        performance_condition: number | null
+        avg_stride_length: number | null
+        avg_power: number | null
+        max_power: number | null
+        normalized_power: number | null
+        training_load: number | null
+        recovery_time_minutes: number | null
+        vo2_max: number | null
       }
       comparison_activities_count: number
       has_splits: boolean
       has_weather: boolean
-    }>(`/ai/activity/${activityId}/analysis`),
+      cached: boolean
+      cached_at?: string
+    }>(`/ai/activity/${activityId}/analysis${regenerate ? '?regenerate=true' : ''}`),
 
   // Workout plan pinning and tracking
   pinPlan: (data: { plan_type: string; plan_data: any; start_date?: string }) =>
@@ -325,6 +480,24 @@ export const aiAPI = {
   deletePinnedPlan: (planId: number) =>
     fetchAPI<{ success: boolean }>(`/ai/pinned-plan/${planId}`, {
       method: 'DELETE',
+    }),
+
+  adjustPinnedPlan: (data: { plan_id: number; adjustment_type?: string }) =>
+    fetchAPI<{
+      success: boolean
+      message: string
+      adjustments_made: number
+      adjustment_factor: number
+      adjustments: string[]
+      readiness_data: {
+        body_battery: number
+        sleep_score: number
+        hrv_status: string
+        readiness_score: number
+      }
+    }>('/ai/adjust-pinned-plan', {
+      method: 'POST',
+      body: JSON.stringify(data),
     }),
 
   // Activity matching
@@ -347,7 +520,10 @@ export const aiAPI = {
       body_battery: number | null
       sleep_score: number | null
       hrv_status: string
+      hrv_avg: number | null
+      hrv_weekly_avg: number | null
       resting_hr: number | null
+      stress_level: number | null
       readiness_score: number
       should_rest: boolean
       should_reduce_intensity: boolean
@@ -392,24 +568,126 @@ export const workoutsAPI = {
       body: JSON.stringify(goal),
     }),
 
-  // Send workout to Garmin
+  // Send single workout to Garmin with proper structure (warmup, main, cooldown)
   sendToGarmin: (workout: {
     title: string
     description: string
     type: string
     duration_minutes: number
-    steps?: any[]
+    steps?: Array<{
+      type: string // warmup, active, recovery, rest, cooldown, repeat
+      duration_minutes?: number
+      duration_type?: string // time, distance, open
+      distance_meters?: number
+      target_type?: string // pace, heart_rate, open
+      target_pace_min?: string // e.g., "5:30"
+      target_pace_max?: string
+      target_hr_zone?: number // 1-5
+      target_hr_bpm_low?: number
+      target_hr_bpm_high?: number
+      description?: string
+      repeat_count?: number
+      repeat_steps?: any[]
+    }>
     target_hr_zone?: string
+    scheduled_date?: string
   }) =>
     fetchAPI<{
       success: boolean
       message: string
-      note: string
+      workout_id?: string
+      scheduled_id?: string
       workout_data: any
       manual_creation_url: string
+      steps_summary?: Array<{
+        type: string
+        duration: string
+        target: string
+      }>
     }>('/workouts/send-to-garmin', {
       method: 'POST',
       body: JSON.stringify(workout),
+    }),
+
+  // Send a day's workouts to Garmin
+  sendDayToGarmin: (workouts: Array<{
+    title: string
+    description: string
+    type: string
+    duration_minutes: number
+    steps?: any[]
+    scheduled_date?: string
+  }>) =>
+    fetchAPI<{
+      success: boolean
+      message: string
+      results: Array<{
+        title: string
+        success: boolean
+        workout_id?: string
+        error?: string
+      }>
+    }>('/workouts/send-day-to-garmin', {
+      method: 'POST',
+      body: JSON.stringify(workouts),
+    }),
+
+  // Send a week's workouts to Garmin
+  sendWeekToGarmin: (data: {
+    workouts: Array<{
+      title: string
+      description: string
+      type: string
+      duration_minutes: number
+      steps?: any[]
+      scheduled_date?: string
+    }>
+    plan_name?: string
+  }) =>
+    fetchAPI<{
+      success: boolean
+      message: string
+      plan_name?: string
+      results: Array<{
+        title: string
+        date?: string
+        success: boolean
+        workout_id?: string
+        error?: string
+      }>
+      manual_url: string
+    }>('/workouts/send-week-to-garmin', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Send a month's workouts to Garmin
+  sendMonthToGarmin: (data: {
+    workouts: Array<{
+      title: string
+      description: string
+      type: string
+      duration_minutes: number
+      steps?: any[]
+      scheduled_date?: string
+    }>
+    plan_name?: string
+  }) =>
+    fetchAPI<{
+      success: boolean
+      message: string
+      plan_name?: string
+      results: Array<{
+        title: string
+        date?: string
+        success: boolean
+        workout_id?: string
+        error?: string
+      }>
+      manual_url: string
+    }>('/workouts/send-month-to-garmin', {
+      method: 'POST',
+      body: JSON.stringify(data),
     }),
 
   // Adjust plan based on readiness

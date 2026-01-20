@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from database import DatabaseManager
+from .auth import get_garmin_service
 
 router = APIRouter()
 
@@ -191,75 +192,418 @@ async def update_goal_progress(goal_id: int, current_value: float):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class WorkoutStep(BaseModel):
+    """Individual workout step (warmup, interval, cooldown, etc.)."""
+    type: str  # warmup, active, recovery, rest, cooldown, repeat
+    duration_minutes: Optional[float] = None
+    duration_type: str = "time"  # time, distance, open
+    distance_meters: Optional[int] = None
+    target_type: Optional[str] = None  # pace, heart_rate, power, cadence, open
+    target_pace_min: Optional[str] = None  # e.g., "5:30" for 5:30 min/km
+    target_pace_max: Optional[str] = None
+    target_hr_zone: Optional[int] = None  # 1-5
+    target_hr_bpm_low: Optional[int] = None
+    target_hr_bpm_high: Optional[int] = None
+    description: Optional[str] = None
+    repeat_count: Optional[int] = None  # for repeat steps
+    repeat_steps: Optional[List[Dict[str, Any]]] = None
+
+
 class GarminWorkoutCreate(BaseModel):
     """Workout structure to send to Garmin."""
     title: str
     description: str
-    type: str  # running, cycling, strength, etc.
+    type: str = "running"  # running, cycling, strength, swimming, walking, hiking
     duration_minutes: int
-    steps: Optional[List[Dict[str, Any]]] = None
+    steps: Optional[List[WorkoutStep]] = None
     target_hr_zone: Optional[str] = None
+    scheduled_date: Optional[str] = None  # YYYY-MM-DD
+
+
+class GarminBatchUpload(BaseModel):
+    """Batch upload multiple workouts."""
+    workouts: List[GarminWorkoutCreate]
+    plan_name: Optional[str] = None
+
+
+def pace_to_speed_ms(pace_str: str) -> float:
+    """Convert pace string (e.g., '5:30') to speed in m/s."""
+    try:
+        parts = pace_str.split(":")
+        if len(parts) == 2:
+            minutes = int(parts[0])
+            seconds = int(parts[1])
+            total_seconds = minutes * 60 + seconds
+            if total_seconds > 0:
+                return 1000 / total_seconds  # m/s
+    except:
+        pass
+    return 2.78  # Default ~5:59 min/km
+
+
+def build_garmin_workout(workout: GarminWorkoutCreate, hr_zones: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Build a properly structured Garmin workout."""
+    
+    # Map workout types to Garmin sport types
+    sport_map = {
+        "running": "RUNNING",
+        "cycling": "CYCLING",
+        "swimming": "SWIMMING",
+        "strength": "STRENGTH_TRAINING",
+        "walking": "WALKING",
+        "hiking": "HIKING",
+        "yoga": "YOGA",
+        "other": "OTHER",
+    }
+    
+    sport_type = sport_map.get(workout.type.lower(), "RUNNING")
+    
+    garmin_workout = {
+        "workoutName": workout.title,
+        "description": workout.description or "",
+        "sport": sport_type,
+        "estimatedDurationInSecs": workout.duration_minutes * 60,
+        "workoutSegments": [],
+    }
+    
+    if workout.steps:
+        segment = {
+            "segmentOrder": 1,
+            "sportType": sport_type,
+            "workoutSteps": []
+        }
+        
+        step_order = 1
+        for step in workout.steps:
+            garmin_step = build_garmin_step(step, step_order, hr_zones)
+            segment["workoutSteps"].append(garmin_step)
+            step_order += 1
+        
+        garmin_workout["workoutSegments"].append(segment)
+    else:
+        # Create default structure with warmup, main, cooldown
+        segment = {
+            "segmentOrder": 1,
+            "sportType": sport_type,
+            "workoutSteps": [
+                {
+                    "type": "WARMUP",
+                    "stepOrder": 1,
+                    "description": "Warm up",
+                    "durationType": "TIME",
+                    "durationValue": 600000,  # 10 minutes in ms
+                    "targetType": "OPEN",
+                },
+                {
+                    "type": "ACTIVE",
+                    "stepOrder": 2,
+                    "description": "Main workout",
+                    "durationType": "TIME",
+                    "durationValue": (workout.duration_minutes - 15) * 60000,
+                    "targetType": "OPEN",
+                },
+                {
+                    "type": "COOLDOWN",
+                    "stepOrder": 3,
+                    "description": "Cool down",
+                    "durationType": "TIME",
+                    "durationValue": 300000,  # 5 minutes in ms
+                    "targetType": "OPEN",
+                }
+            ]
+        }
+        garmin_workout["workoutSegments"].append(segment)
+    
+    return garmin_workout
+
+
+def build_garmin_step(step: WorkoutStep, order: int, hr_zones: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Build a single Garmin workout step."""
+    
+    # Map step types
+    type_map = {
+        "warmup": "WARMUP",
+        "active": "ACTIVE",
+        "recovery": "RECOVERY",
+        "rest": "REST",
+        "cooldown": "COOLDOWN",
+        "interval": "ACTIVE",
+        "repeat": "REPEAT",
+    }
+    
+    step_type = type_map.get(step.type.lower(), "ACTIVE")
+    
+    garmin_step = {
+        "type": step_type,
+        "stepOrder": order,
+        "description": step.description or "",
+    }
+    
+    # Set duration
+    if step.duration_type == "distance" and step.distance_meters:
+        garmin_step["durationType"] = "DISTANCE"
+        garmin_step["durationValue"] = step.distance_meters
+    elif step.duration_minutes:
+        garmin_step["durationType"] = "TIME"
+        garmin_step["durationValue"] = int(step.duration_minutes * 60000)  # milliseconds
+    else:
+        garmin_step["durationType"] = "OPEN"
+    
+    # Set target
+    if step.target_type == "pace" and step.target_pace_min:
+        speed_low = pace_to_speed_ms(step.target_pace_max or step.target_pace_min) * 0.95
+        speed_high = pace_to_speed_ms(step.target_pace_min) * 1.05
+        garmin_step["targetType"] = "SPEED"
+        garmin_step["targetValueLow"] = speed_low
+        garmin_step["targetValueHigh"] = speed_high
+    elif step.target_type == "heart_rate":
+        garmin_step["targetType"] = "HEART_RATE"
+        if step.target_hr_bpm_low and step.target_hr_bpm_high:
+            garmin_step["targetValueLow"] = step.target_hr_bpm_low
+            garmin_step["targetValueHigh"] = step.target_hr_bpm_high
+        elif step.target_hr_zone and hr_zones:
+            # Get HR zone boundaries
+            zone_key = f"zone{step.target_hr_zone}"
+            zone_data = hr_zones.get("zones", {}).get(zone_key, {})
+            garmin_step["targetValueLow"] = zone_data.get("low", 100)
+            garmin_step["targetValueHigh"] = zone_data.get("high", 150)
+    else:
+        garmin_step["targetType"] = "OPEN"
+    
+    # Handle repeat steps
+    if step.type.lower() == "repeat" and step.repeat_count and step.repeat_steps:
+        garmin_step["numberOfIterations"] = step.repeat_count
+        garmin_step["childSteps"] = []
+        for i, child in enumerate(step.repeat_steps):
+            child_step = WorkoutStep(**child)
+            garmin_step["childSteps"].append(build_garmin_step(child_step, i + 1, hr_zones))
+    
+    return garmin_step
 
 
 @router.post("/send-to-garmin")
 async def send_workout_to_garmin(workout: GarminWorkoutCreate):
     """
-    Send a workout to Garmin Connect.
-    Note: This requires Garmin workout API access which has limited availability.
-    Currently returns a placeholder response.
+    Send a single workout to Garmin Connect.
+    Creates a properly structured workout with warmup, main workout, and cooldown.
+    The workout will appear in Garmin Connect and sync to your watch.
     """
     try:
-        # TODO: Implement actual Garmin workout upload
-        # The Garmin Connect API for creating workouts is limited and requires
-        # specific API access. For now, we return a helpful message.
+        garmin = get_garmin_service()
         
-        # Build workout structure for Garmin
-        garmin_workout = {
-            "workoutName": workout.title,
-            "description": workout.description,
-            "sport": workout.type.upper() if workout.type else "RUNNING",
-            "estimatedDurationInSecs": workout.duration_minutes * 60,
-            "workoutSegments": [],
-        }
+        if not garmin.is_authenticated:
+            raise HTTPException(status_code=401, detail="Not authenticated")
         
-        # Convert steps to Garmin format
+        # Convert steps to the format expected by garmin_service
+        formatted_steps = []
         if workout.steps:
             for step in workout.steps:
-                segment = {
-                    "segmentOrder": len(garmin_workout["workoutSegments"]) + 1,
-                    "sportType": workout.type.upper() if workout.type else "RUNNING",
-                    "workoutSteps": [{
-                        "type": step.get("type", "interval").upper(),
-                        "stepOrder": 1,
-                        "description": step.get("description", ""),
-                        "durationType": "TIME",
-                        "durationValue": step.get("duration_minutes", 5) * 60000,  # milliseconds
-                    }]
+                formatted_step = {
+                    "type": step.type,
+                    "duration_minutes": step.duration_minutes,
+                    "distance_meters": step.distance_meters,
+                    "target_type": step.target_type or "open",
+                    "target_pace_min": step.target_pace_min,
+                    "target_pace_max": step.target_pace_max,
+                    "target_hr_zone": step.target_hr_zone,
+                    "description": step.description or "",
+                    "repeat_count": step.repeat_count,
+                    "repeat_steps": step.repeat_steps,
                 }
-                
-                # Add pace target if available
-                if step.get("target_pace_min"):
-                    # Convert pace to speed (m/s) for Garmin
-                    pace_parts = step["target_pace_min"].split(":")
-                    if len(pace_parts) == 2:
-                        total_seconds = int(pace_parts[0]) * 60 + int(pace_parts[1])
-                        speed_ms = 1000 / total_seconds
-                        segment["workoutSteps"][0]["targetType"] = "SPEED"
-                        segment["workoutSteps"][0]["targetValueLow"] = speed_ms * 0.95
-                        segment["workoutSteps"][0]["targetValueHigh"] = speed_ms * 1.05
-                
-                garmin_workout["workoutSegments"].append(segment)
+                formatted_steps.append(formatted_step)
+        else:
+            # Create default steps with warmup, main, cooldown
+            warmup_duration = min(10, workout.duration_minutes * 0.15)
+            cooldown_duration = min(5, workout.duration_minutes * 0.1)
+            main_duration = workout.duration_minutes - warmup_duration - cooldown_duration
+            
+            formatted_steps = [
+                {"type": "warmup", "duration_minutes": warmup_duration, "target_type": "open", "description": "Warm up gradually"},
+                {"type": "active", "duration_minutes": main_duration, "target_type": "open", "description": "Main workout"},
+                {"type": "cooldown", "duration_minutes": cooldown_duration, "target_type": "open", "description": "Cool down easy"},
+            ]
         
-        return {
-            "success": True,
-            "message": f"Workout '{workout.title}' prepared for Garmin",
-            "note": "Direct Garmin upload requires additional API access. For now, you can manually create this workout in Garmin Connect.",
-            "workout_data": garmin_workout,
-            "manual_creation_url": "https://connect.garmin.com/modern/workouts"
-        }
+        # Upload using the structured method
+        upload_result = garmin.upload_running_workout_structured(
+            workout_name=workout.title,
+            steps=formatted_steps,
+            estimated_duration_secs=workout.duration_minutes * 60
+        )
         
+        upload_success = upload_result.get("success", False) and not upload_result.get("error")
+        
+        # Try to schedule if date provided
+        scheduled_result = None
+        if workout.scheduled_date and upload_success and upload_result.get("workoutId"):
+            try:
+                scheduled_result = garmin.schedule_workout(
+                    upload_result["workoutId"], 
+                    workout.scheduled_date
+                )
+            except Exception as e:
+                print(f"Scheduling error: {e}")
+        
+        if upload_success:
+            return {
+                "success": True,
+                "message": f"✅ Workout '{workout.title}' uploaded to Garmin Connect! Sync your watch to download it.",
+                "workout_id": upload_result.get("workoutId"),
+                "scheduled": bool(scheduled_result and not scheduled_result.get("error")),
+                "scheduled_date": workout.scheduled_date,
+                "steps_summary": [
+                    {
+                        "type": s.get("type", "active"),
+                        "duration": f"{s.get('duration_minutes', 0)} min" if s.get("duration_minutes") else "Open",
+                        "target": f"{s.get('target_pace_min')}/km" if s.get("target_pace_min") else f"Zone {s.get('target_hr_zone')}" if s.get("target_hr_zone") else "Open"
+                    }
+                    for s in formatted_steps
+                ],
+                "instructions": "Open Garmin Connect app on your phone and sync your watch to download the workout."
+            }
+        else:
+            error_msg = upload_result.get("error", "Unknown error")
+            return {
+                "success": False,
+                "message": f"❌ Failed to upload workout: {error_msg}",
+                "error": error_msg,
+                "manual_creation_url": "https://connect.garmin.com/modern/workouts",
+                "instructions": "You can manually create this workout in Garmin Connect."
+            }
+        
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/send-day-to-garmin")
+async def send_day_to_garmin(day_workouts: List[GarminWorkoutCreate]):
+    """Send all workouts for a single day to Garmin."""
+    try:
+        results = []
+        for workout in day_workouts:
+            result = await send_workout_to_garmin(workout)
+            results.append(result)
+        
+        success_count = sum(1 for r in results if r.get("success"))
+        
+        return {
+            "success": success_count > 0,
+            "message": f"Sent {success_count}/{len(day_workouts)} workouts to Garmin",
+            "results": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/send-week-to-garmin")
+async def send_week_to_garmin(request: GarminBatchUpload):
+    """Send an entire week's workouts to Garmin Connect.
+    
+    All workouts will be uploaded and will appear in your Garmin Connect workout library.
+    Sync your watch to download them.
+    """
+    try:
+        garmin = get_garmin_service()
+        
+        if not garmin.is_authenticated:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        results = []
+        
+        for workout in request.workouts:
+            try:
+                # Convert steps to the format expected by garmin_service
+                formatted_steps = []
+                if workout.steps:
+                    for step in workout.steps:
+                        formatted_step = {
+                            "type": step.type,
+                            "duration_minutes": step.duration_minutes,
+                            "distance_meters": step.distance_meters,
+                            "target_type": step.target_type or "open",
+                            "target_pace_min": step.target_pace_min,
+                            "target_pace_max": step.target_pace_max,
+                            "target_hr_zone": step.target_hr_zone,
+                            "description": step.description or "",
+                            "repeat_count": step.repeat_count,
+                            "repeat_steps": step.repeat_steps,
+                        }
+                        formatted_steps.append(formatted_step)
+                else:
+                    # Create default steps
+                    warmup_duration = min(10, workout.duration_minutes * 0.15)
+                    cooldown_duration = min(5, workout.duration_minutes * 0.1)
+                    main_duration = workout.duration_minutes - warmup_duration - cooldown_duration
+                    
+                    formatted_steps = [
+                        {"type": "warmup", "duration_minutes": warmup_duration, "target_type": "open", "description": "Warm up"},
+                        {"type": "active", "duration_minutes": main_duration, "target_type": "open", "description": workout.description or "Main workout"},
+                        {"type": "cooldown", "duration_minutes": cooldown_duration, "target_type": "open", "description": "Cool down"},
+                    ]
+                
+                # Upload the workout
+                upload_result = garmin.upload_running_workout_structured(
+                    workout_name=workout.title,
+                    steps=formatted_steps,
+                    estimated_duration_secs=workout.duration_minutes * 60
+                )
+                
+                upload_success = upload_result.get("success", False) and not upload_result.get("error")
+                
+                # Try to schedule if date provided
+                if workout.scheduled_date and upload_success and upload_result.get("workoutId"):
+                    try:
+                        garmin.schedule_workout(upload_result["workoutId"], workout.scheduled_date)
+                    except Exception:
+                        pass  # Scheduling is optional
+                
+                results.append({
+                    "title": workout.title,
+                    "date": workout.scheduled_date,
+                    "success": upload_success,
+                    "workout_id": upload_result.get("workoutId"),
+                    "error": upload_result.get("error") if not upload_success else None
+                })
+                
+            except Exception as e:
+                results.append({
+                    "title": workout.title,
+                    "date": workout.scheduled_date,
+                    "success": False,
+                    "error": str(e)
+                })
+        
+        success_count = sum(1 for r in results if r.get("success"))
+        total_count = len(request.workouts)
+        
+        if success_count == total_count:
+            message = f"✅ All {success_count} workouts uploaded to Garmin Connect! Sync your watch to download them."
+        elif success_count > 0:
+            message = f"⚠️ Uploaded {success_count}/{total_count} workouts to Garmin. Some failed - check results."
+        else:
+            message = f"❌ Failed to upload workouts to Garmin."
+        
+        return {
+            "success": success_count > 0,
+            "message": message,
+            "plan_name": request.plan_name,
+            "uploaded_count": success_count,
+            "total_count": total_count,
+            "results": results,
+            "instructions": "Open Garmin Connect app and sync your watch to download the workouts."
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/send-month-to-garmin")
+async def send_month_to_garmin(request: GarminBatchUpload):
+    """Send an entire month's workouts to Garmin."""
+    # Uses the same logic as week upload
+    return await send_week_to_garmin(request)
 
 
 class PlanAdjustmentRequest(BaseModel):

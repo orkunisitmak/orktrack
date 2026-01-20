@@ -2,9 +2,6 @@
 fastapi>=0.109.0
 uvicorn>=0.27.0
 
-# Core framework (legacy)
-streamlit==1.40.0
-
 # Garmin Connect API
 garminconnect>=0.2.38
 garth>=0.5.17

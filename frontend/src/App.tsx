@@ -5,7 +5,6 @@ import { authAPI } from '@/lib/api'
 import Layout from '@/components/Layout'
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
-import Chat from '@/pages/Chat'
 import Planner from '@/pages/Planner'
 import Insights from '@/pages/Insights'
 
@@ -78,7 +77,6 @@ function App() {
           }
         >
           <Route index element={<Dashboard />} />
-          <Route path="chat" element={<Chat />} />
           <Route path="planner" element={<Planner />} />
           <Route path="insights" element={<Insights />} />
         </Route>

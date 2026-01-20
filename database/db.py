@@ -12,7 +12,7 @@ from config import settings
 from .models import (
     Base, Activity, HealthStats, SleepData, 
     WorkoutPlan, ScheduledWorkout, UserGoal, 
-    ChatHistory, HealthInsight
+    ChatHistory, HealthInsight, ActivityAnalysis, SyncStatus
 )
 
 # Global engine and session factory
@@ -674,6 +674,12 @@ class DatabaseManager:
         intensity: str = "moderate",
         exercises: Optional[List] = None,
         target_hr_zone: Optional[str] = None,
+        # New fields for rich display
+        key_focus: Optional[str] = None,
+        estimated_distance_km: Optional[float] = None,
+        target_hr_bpm: Optional[str] = None,
+        supplementary: Optional[List] = None,
+        optimal_time: Optional[str] = None,
     ) -> Optional[int]:
         """Save a scheduled workout."""
         with get_db_session() as session:
@@ -688,6 +694,12 @@ class DatabaseManager:
                 exercises=exercises or [],
                 target_hr_zone=target_hr_zone,
                 is_completed=False,
+                # New fields
+                key_focus=key_focus,
+                estimated_distance_km=estimated_distance_km,
+                target_hr_bpm=target_hr_bpm,
+                supplementary=supplementary,
+                optimal_time=optimal_time,
             )
             session.add(workout)
             
@@ -768,6 +780,186 @@ class DatabaseManager:
             
             session.commit()
             return True
+
+    @staticmethod
+    def update_scheduled_workout(
+        workout_id: int,
+        duration_minutes: Optional[int] = None,
+        intensity: Optional[str] = None,
+        description: Optional[str] = None,
+        notes: Optional[str] = None,
+        exercises: Optional[List[Dict]] = None,
+    ) -> bool:
+        """Update a scheduled workout's details."""
+        with get_db_session() as session:
+            workout = session.execute(
+                select(ScheduledWorkout).where(ScheduledWorkout.id == workout_id)
+            ).scalar_one_or_none()
+            
+            if not workout:
+                return False
+            
+            if duration_minutes is not None:
+                workout.duration_minutes = duration_minutes
+            if intensity is not None:
+                workout.intensity = intensity
+            if description is not None:
+                workout.description = description
+            if notes is not None:
+                workout.notes = notes
+            if exercises is not None:
+                workout.exercises = exercises
+            
+            session.commit()
+            return True
+    
+    # ==================== Activity Analysis ====================
+    
+    @staticmethod
+    def save_activity_analysis(
+        activity_id: str,
+        activity_type: str,
+        activity_name: str,
+        activity_date: Optional[datetime],
+        overall_score: int,
+        overall_rating: str,
+        analysis_data: Dict[str, Any],
+        activity_summary: Dict[str, Any],
+        comparison_count: int = 0,
+        similar_activities_data: Optional[Dict] = None,
+        ai_model: str = "gemini"
+    ) -> ActivityAnalysis:
+        """Save or update an activity analysis."""
+        with get_db_session() as session:
+            existing = session.execute(
+                select(ActivityAnalysis).where(ActivityAnalysis.activity_id == activity_id)
+            ).scalar_one_or_none()
+            
+            if existing:
+                analysis = existing
+            else:
+                analysis = ActivityAnalysis(activity_id=activity_id)
+                session.add(analysis)
+            
+            analysis.activity_type = activity_type
+            analysis.activity_name = activity_name
+            analysis.activity_date = activity_date
+            analysis.overall_score = overall_score
+            analysis.overall_rating = overall_rating
+            analysis.analysis_data = analysis_data
+            analysis.activity_summary = activity_summary
+            analysis.comparison_activities_count = comparison_count
+            analysis.similar_activities_data = similar_activities_data
+            analysis.ai_model = ai_model
+            analysis.updated_at = datetime.now()
+            
+            session.commit()
+            return analysis
+    
+    @staticmethod
+    def get_activity_analysis(activity_id: str) -> Optional[ActivityAnalysis]:
+        """Get a saved activity analysis."""
+        with get_db_session() as session:
+            result = session.execute(
+                select(ActivityAnalysis).where(ActivityAnalysis.activity_id == activity_id)
+            ).scalar_one_or_none()
+            return result
+    
+    @staticmethod
+    def delete_activity_analysis(activity_id: str) -> bool:
+        """Delete an activity analysis (for regeneration)."""
+        with get_db_session() as session:
+            result = session.execute(
+                delete(ActivityAnalysis).where(ActivityAnalysis.activity_id == activity_id)
+            )
+            session.commit()
+            return result.rowcount > 0
+    
+    @staticmethod
+    def get_similar_activity_analyses(
+        activity_type: str,
+        exclude_activity_id: Optional[str] = None,
+        limit: int = 10
+    ) -> List[ActivityAnalysis]:
+        """Get analyses for similar activities for comparison."""
+        with get_db_session() as session:
+            query = select(ActivityAnalysis).where(
+                ActivityAnalysis.activity_type == activity_type
+            )
+            
+            if exclude_activity_id:
+                query = query.where(ActivityAnalysis.activity_id != exclude_activity_id)
+            
+            query = query.order_by(ActivityAnalysis.activity_date.desc()).limit(limit)
+            
+            result = session.execute(query).scalars().all()
+            return list(result)
+    
+    # ==================== Sync Status ====================
+    
+    @staticmethod
+    def get_sync_status(data_type: str) -> Optional[SyncStatus]:
+        """Get sync status for a data type."""
+        with get_db_session() as session:
+            result = session.execute(
+                select(SyncStatus).where(SyncStatus.data_type == data_type)
+            ).scalar_one_or_none()
+            return result
+    
+    @staticmethod
+    def get_all_sync_status() -> Dict[str, Any]:
+        """Get all sync statuses."""
+        with get_db_session() as session:
+            result = session.execute(select(SyncStatus)).scalars().all()
+            return {s.data_type: {
+                "last_sync_at": s.last_sync_at.isoformat() if s.last_sync_at else None,
+                "last_sync_success": s.last_sync_success,
+                "records_synced": s.records_synced,
+                "is_stale": s.is_stale,
+            } for s in result}
+    
+    @staticmethod
+    def update_sync_status(
+        data_type: str,
+        success: bool = True,
+        records_synced: int = 0,
+        duration_seconds: float = 0,
+        error: Optional[str] = None
+    ) -> SyncStatus:
+        """Update sync status for a data type."""
+        with get_db_session() as session:
+            existing = session.execute(
+                select(SyncStatus).where(SyncStatus.data_type == data_type)
+            ).scalar_one_or_none()
+            
+            if existing:
+                status = existing
+            else:
+                status = SyncStatus(data_type=data_type)
+                session.add(status)
+            
+            status.last_sync_at = datetime.utcnow()
+            status.last_sync_success = success
+            status.records_synced = records_synced
+            status.sync_duration_seconds = duration_seconds
+            status.last_error = error
+            
+            session.commit()
+            return status
+    
+    @staticmethod
+    def is_data_stale(data_type: str, max_age_minutes: int = 5) -> bool:
+        """Check if data needs to be refreshed."""
+        with get_db_session() as session:
+            status = session.execute(
+                select(SyncStatus).where(SyncStatus.data_type == data_type)
+            ).scalar_one_or_none()
+            
+            if not status or not status.last_sync_at:
+                return True
+            
+            age = datetime.utcnow() - status.last_sync_at
+            return age > timedelta(minutes=max_age_minutes)
 
 
 def _parse_datetime(value: Any) -> Optional[datetime]:

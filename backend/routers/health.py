@@ -189,6 +189,29 @@ async def get_stress(stress_date: date):
         return {}
 
 
+@router.get("/stress/{stress_date}/all-day")
+async def get_all_day_stress(stress_date: date):
+    """Get all-day stress data with timeline for a specific date.
+    
+    Returns detailed stress values throughout the day including:
+    - Stress timeline values
+    - Rest stress
+    - Activity stress
+    - Low, medium, high stress periods
+    """
+    try:
+        garmin = get_garmin_service()
+        
+        if not garmin.is_authenticated:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        stress_data = garmin.get_all_day_stress(stress_date)
+        return stress_data
+        
+    except Exception as e:
+        return {}
+
+
 @router.get("/body-battery")
 async def get_body_battery(bb_date: Optional[date] = None):
     """Get body battery data."""
@@ -413,3 +436,144 @@ async def get_personal_records():
         return garmin.get_personal_records()
     except Exception as e:
         return {}
+
+
+# ==================== Sync Endpoints ====================
+
+@router.get("/sync/status")
+async def get_sync_status():
+    """Get sync status for all data types."""
+    try:
+        sync_status = DatabaseManager.get_all_sync_status()
+        
+        # Add default statuses if not present
+        data_types = ["activities", "health_stats", "sleep", "body_battery"]
+        for dt in data_types:
+            if dt not in sync_status:
+                sync_status[dt] = {
+                    "last_sync_at": None,
+                    "last_sync_success": False,
+                    "records_synced": 0,
+                    "is_stale": True,
+                }
+        
+        return {
+            "sync_status": sync_status,
+            "server_time": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/sync")
+async def sync_all_data():
+    """
+    Sync all data from Garmin to local database.
+    This is a manual sync that fetches fresh data regardless of cache age.
+    """
+    import time
+    start_time = time.time()
+    
+    try:
+        garmin = get_garmin_service()
+        
+        if not garmin.is_authenticated:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        results = {
+            "activities": {"success": False, "count": 0, "error": None},
+            "health_stats": {"success": False, "count": 0, "error": None},
+            "sleep": {"success": False, "count": 0, "error": None},
+            "body_battery": {"success": False, "count": 0, "error": None},
+        }
+        
+        today = date.today()
+        sync_days = 14  # Sync last 14 days
+        
+        # Sync activities
+        try:
+            activities = garmin.get_activities(limit=50)
+            for act in activities:
+                if isinstance(act, dict):
+                    DatabaseManager.save_activity(act)
+            results["activities"]["success"] = True
+            results["activities"]["count"] = len(activities) if isinstance(activities, list) else 0
+            DatabaseManager.update_sync_status(
+                "activities", True, results["activities"]["count"], 
+                time.time() - start_time
+            )
+        except Exception as e:
+            results["activities"]["error"] = str(e)
+            DatabaseManager.update_sync_status("activities", False, 0, 0, str(e))
+        
+        # Sync health stats
+        try:
+            stats_count = 0
+            for i in range(sync_days):
+                stat_date = today - timedelta(days=i)
+                try:
+                    stats = garmin.get_stats(stat_date)
+                    if stats:
+                        DatabaseManager.save_health_stats(stat_date, stats)
+                        stats_count += 1
+                except Exception:
+                    pass
+            results["health_stats"]["success"] = True
+            results["health_stats"]["count"] = stats_count
+            DatabaseManager.update_sync_status(
+                "health_stats", True, stats_count, 
+                time.time() - start_time
+            )
+        except Exception as e:
+            results["health_stats"]["error"] = str(e)
+            DatabaseManager.update_sync_status("health_stats", False, 0, 0, str(e))
+        
+        # Sync sleep data
+        try:
+            sleep_count = 0
+            for i in range(sync_days):
+                sleep_date = today - timedelta(days=i)
+                try:
+                    sleep = garmin.get_sleep_data(sleep_date)
+                    if sleep:
+                        DatabaseManager.save_sleep_data(sleep_date, sleep)
+                        sleep_count += 1
+                except Exception:
+                    pass
+            results["sleep"]["success"] = True
+            results["sleep"]["count"] = sleep_count
+            DatabaseManager.update_sync_status(
+                "sleep", True, sleep_count, 
+                time.time() - start_time
+            )
+        except Exception as e:
+            results["sleep"]["error"] = str(e)
+            DatabaseManager.update_sync_status("sleep", False, 0, 0, str(e))
+        
+        # Sync body battery
+        try:
+            bb = garmin.get_body_battery_detailed(today)
+            if bb:
+                results["body_battery"]["success"] = True
+                results["body_battery"]["count"] = 1
+            DatabaseManager.update_sync_status(
+                "body_battery", True, 1, 
+                time.time() - start_time
+            )
+        except Exception as e:
+            results["body_battery"]["error"] = str(e)
+            DatabaseManager.update_sync_status("body_battery", False, 0, 0, str(e))
+        
+        total_time = time.time() - start_time
+        
+        return {
+            "success": True,
+            "results": results,
+            "total_time_seconds": round(total_time, 2),
+            "synced_at": datetime.utcnow().isoformat(),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

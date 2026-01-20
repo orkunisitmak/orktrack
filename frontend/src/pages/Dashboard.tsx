@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
   Footprints,
@@ -16,6 +17,12 @@ import {
   Gauge,
   Battery,
   Brain,
+  Wind,
+  ThermometerSun,
+  Cloud,
+  CloudOff,
+  Check,
+  Loader2,
 } from 'lucide-react'
 import { healthAPI, activitiesAPI, aiAPI } from '@/lib/api'
 import { formatNumber, formatDuration, cn } from '@/lib/utils'
@@ -26,39 +33,41 @@ import SleepChart from '@/components/charts/SleepChart'
 import ActivityList from '@/components/ActivityList'
 
 export default function Dashboard() {
+  const queryClient = useQueryClient()
+  
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
     queryKey: ['health-summary'],
     queryFn: () => healthAPI.getSummary(7),
     retry: 1,
-    staleTime: 60000,
+    staleTime: 300000, // 5 minutes - serve from cache
   })
 
   const { data: dailyStats, isLoading: dailyLoading, error: dailyError, refetch: refetchDaily } = useQuery({
     queryKey: ['daily-stats'],
     queryFn: () => healthAPI.getDailyStats(14),
     retry: 2,
-    staleTime: 60000,
+    staleTime: 300000, // 5 minutes
   })
 
   const { data: sleepData, isLoading: sleepLoading, error: sleepError, refetch: refetchSleep } = useQuery({
     queryKey: ['sleep-data'],
     queryFn: () => healthAPI.getSleep(14),
     retry: 2,
-    staleTime: 60000,
+    staleTime: 300000, // 5 minutes
   })
 
   const { data: activities, isLoading: activitiesLoading, error: activitiesError, refetch: refetchActivities } = useQuery({
     queryKey: ['recent-activities'],
     queryFn: () => activitiesAPI.getRecent(15),
     retry: 2,
-    staleTime: 60000,
+    staleTime: 300000, // 5 minutes
   })
 
   const { data: activityStats } = useQuery({
     queryKey: ['activity-stats'],
     queryFn: () => activitiesAPI.getStats(30),
     retry: 1,
-    staleTime: 60000,
+    staleTime: 300000, // 5 minutes
   })
 
   // Fetch performance metrics (VO2max, race predictions, etc.)
@@ -66,7 +75,7 @@ export default function Dashboard() {
     queryKey: ['performance-metrics'],
     queryFn: () => healthAPI.getPerformanceMetrics(),
     retry: 1,
-    staleTime: 120000, // 2 minutes
+    staleTime: 300000, // 5 minutes
   })
 
   // Fetch today's readiness
@@ -74,7 +83,7 @@ export default function Dashboard() {
     queryKey: ['today-readiness'],
     queryFn: () => aiAPI.getTodayReadiness(),
     retry: 1,
-    staleTime: 60000,
+    staleTime: 300000, // 5 minutes
   })
 
   // Fetch body battery details
@@ -82,16 +91,61 @@ export default function Dashboard() {
     queryKey: ['body-battery-detailed'],
     queryFn: () => healthAPI.getBodyBatteryDetailed(),
     retry: 1,
-    staleTime: 60000,
+    staleTime: 300000, // 5 minutes
   })
 
-  const handleRefresh = () => {
-    refetchDaily()
-    refetchSleep()
-    refetchActivities()
+  // Sync status
+  const { data: syncStatus } = useQuery({
+    queryKey: ['sync-status'],
+    queryFn: () => healthAPI.getSyncStatus(),
+    staleTime: 30000, // Check every 30 seconds
+  })
+
+  // Sync mutation
+  const syncMutation = useMutation({
+    mutationFn: () => healthAPI.syncData(),
+    onSuccess: () => {
+      // Invalidate all queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['health-summary'] })
+      queryClient.invalidateQueries({ queryKey: ['daily-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['sleep-data'] })
+      queryClient.invalidateQueries({ queryKey: ['recent-activities'] })
+      queryClient.invalidateQueries({ queryKey: ['activity-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['performance-metrics'] })
+      queryClient.invalidateQueries({ queryKey: ['today-readiness'] })
+      queryClient.invalidateQueries({ queryKey: ['body-battery-detailed'] })
+      queryClient.invalidateQueries({ queryKey: ['sync-status'] })
+    },
+  })
+
+  const handleSync = () => {
+    syncMutation.mutate()
   }
 
   const hasErrors = dailyError || sleepError || activitiesError
+  
+  // Format last sync time
+  const getLastSyncTime = () => {
+    const statuses = syncStatus?.sync_status
+    if (!statuses) return null
+    
+    const times = Object.values(statuses)
+      .filter(s => s.last_sync_at)
+      .map(s => new Date(s.last_sync_at!).getTime())
+    
+    if (times.length === 0) return null
+    
+    const lastSync = new Date(Math.max(...times))
+    const now = new Date()
+    const diffMs = now.getTime() - lastSync.getTime()
+    const diffMins = Math.floor(diffMs / 60000)
+    
+    if (diffMins < 1) return 'Just now'
+    if (diffMins < 60) return `${diffMins}m ago`
+    const diffHours = Math.floor(diffMins / 60)
+    if (diffHours < 24) return `${diffHours}h ago`
+    return lastSync.toLocaleDateString()
+  }
 
   // Extract performance data
   const vo2max = performanceMetrics?.max_metrics?.generic?.vo2MaxValue || 
@@ -107,20 +161,56 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-3xl font-bold mb-2">Dashboard</h1>
-          <p className="text-muted-foreground">
-            Your comprehensive health and fitness overview
+          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <p className="text-sm text-muted-foreground">
+            Your health and fitness overview
           </p>
         </div>
-        {hasErrors && (
+        <div className="flex items-center gap-3">
+          {/* Last Sync Status */}
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            {syncStatus?.sync_status ? (
+              <>
+                <Cloud className="w-4 h-4 text-green-500" />
+                <span>Synced {getLastSyncTime()}</span>
+              </>
+            ) : (
+              <>
+                <CloudOff className="w-4 h-4 text-yellow-500" />
+                <span>Not synced</span>
+              </>
+            )}
+          </div>
+          
+          {/* Sync Button */}
           <button
-            onClick={handleRefresh}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            onClick={handleSync}
+            disabled={syncMutation.isPending}
+            className={cn(
+              "flex items-center gap-2 px-4 py-2 rounded-xl transition-all",
+              syncMutation.isPending 
+                ? "bg-muted text-muted-foreground cursor-not-allowed"
+                : "bg-primary text-primary-foreground hover:bg-primary/90"
+            )}
           >
-            <RefreshCw className="w-4 h-4" />
-            Retry
+            {syncMutation.isPending ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Syncing...
+              </>
+            ) : syncMutation.isSuccess ? (
+              <>
+                <Check className="w-4 h-4" />
+                Synced
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-4 h-4" />
+                Sync Now
+              </>
+            )}
           </button>
-        )}
+        </div>
       </div>
 
       {/* Error banner */}
@@ -206,6 +296,40 @@ export default function Dashboard() {
               {readinessLoading ? "..." : Math.round(todayReadiness?.readiness_score || 0)}
               <span className="text-sm font-normal text-muted-foreground">/100</span>
             </p>
+          </div>
+
+          {/* Stress Level */}
+          <div className="p-4 rounded-xl bg-background/50">
+            <div className="flex items-center gap-2 mb-2">
+              <Brain className={cn(
+                "w-4 h-4",
+                (todayReadiness?.stress_level || 0) < 30 ? "text-green-500" :
+                (todayReadiness?.stress_level || 0) < 50 ? "text-yellow-500" : "text-orange-500"
+              )} />
+              <span className="text-sm text-muted-foreground">Stress</span>
+            </div>
+            <p className="text-2xl font-bold">
+              {readinessLoading ? "..." : todayReadiness?.stress_level || "--"}
+              <span className="text-sm font-normal text-muted-foreground">/100</span>
+            </p>
+          </div>
+
+          {/* HRV Status */}
+          <div className="p-4 rounded-xl bg-background/50">
+            <div className="flex items-center gap-2 mb-2">
+              <Activity className={cn(
+                "w-4 h-4",
+                todayReadiness?.hrv_status === "BALANCED" ? "text-green-500" :
+                todayReadiness?.hrv_status === "HIGH" ? "text-blue-500" : "text-yellow-500"
+              )} />
+              <span className="text-sm text-muted-foreground">HRV Status</span>
+            </div>
+            <p className="text-lg font-bold">
+              {readinessLoading ? "..." : todayReadiness?.hrv_status || "--"}
+            </p>
+            {todayReadiness?.hrv_avg && (
+              <p className="text-xs text-muted-foreground">{todayReadiness.hrv_avg} ms</p>
+            )}
           </div>
         </div>
 

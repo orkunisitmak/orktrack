@@ -198,9 +198,16 @@ class ScheduledWorkout(Base):
     description = Column(Text)
     duration_minutes = Column(Integer)
     intensity = Column(String(20))
-    exercises = Column(JSON)
-    target_hr_zone = Column(String(20))
+    exercises = Column(JSON)  # Stores workout steps
+    target_hr_zone = Column(String(50))
     estimated_calories = Column(Integer)
+    
+    # Additional workout details (for rich display like in generated plans)
+    key_focus = Column(Text)
+    estimated_distance_km = Column(Float)
+    target_hr_bpm = Column(String(50))
+    supplementary = Column(JSON)  # Supplementary activities for this day
+    optimal_time = Column(String(50))
     
     # Completion tracking
     is_completed = Column(Boolean, default=False)
@@ -322,3 +329,69 @@ class HealthInsight(Base):
     
     def __repr__(self):
         return f"<HealthInsight(date={self.insight_date}, period={self.period})>"
+
+
+class ActivityAnalysis(Base):
+    """Model for storing AI-generated activity analyses."""
+    
+    __tablename__ = "activity_analyses"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    activity_id = Column(String(50), unique=True, nullable=False, index=True)
+    activity_type = Column(String(50))
+    activity_name = Column(String(255))
+    activity_date = Column(DateTime)
+    
+    # Analysis scores
+    overall_score = Column(Integer)
+    overall_rating = Column(String(50))
+    
+    # Analysis content
+    analysis_data = Column(JSON, nullable=False)
+    
+    # Activity summary data used for analysis
+    activity_summary = Column(JSON)
+    
+    # Comparison data
+    comparison_activities_count = Column(Integer, default=0)
+    similar_activities_data = Column(JSON)
+    
+    # Generation info
+    ai_model = Column(String(50))
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def __repr__(self):
+        return f"<ActivityAnalysis(activity_id={self.activity_id}, score={self.overall_score})>"
+
+
+class SyncStatus(Base):
+    """Model for tracking data sync status with Garmin."""
+    
+    __tablename__ = "sync_status"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data_type = Column(String(50), unique=True, nullable=False, index=True)  # activities, health_stats, sleep, etc.
+    
+    last_sync_at = Column(DateTime)
+    last_sync_success = Column(Boolean, default=True)
+    last_error = Column(Text)
+    
+    # Sync metadata
+    records_synced = Column(Integer, default=0)
+    sync_duration_seconds = Column(Float)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def __repr__(self):
+        return f"<SyncStatus(type={self.data_type}, last_sync={self.last_sync_at})>"
+    
+    @property
+    def is_stale(self) -> bool:
+        """Check if data is stale (older than 5 minutes)."""
+        if not self.last_sync_at:
+            return True
+        from datetime import timedelta
+        return datetime.utcnow() - self.last_sync_at > timedelta(minutes=5)

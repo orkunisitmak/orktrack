@@ -456,6 +456,8 @@ class GarminService:
             "body_battery": None,
             "sleep_score": None,
             "hrv_status": "Unknown",
+            "hrv_avg": None,
+            "hrv_weekly_avg": None,
             "resting_hr": None,
             "stress_level": None,
             "readiness_score": 50,  # Default
@@ -521,33 +523,60 @@ class GarminService:
             try:
                 sleep = self.get_sleep_data(sleep_date)
                 if sleep:
-                    dto = sleep.get("dailySleepDTO", {})
-                    if dto:
-                        # Try different paths to get sleep score
-                        sleep_scores = dto.get("sleepScores")
-                        if isinstance(sleep_scores, dict):
-                            overall = sleep_scores.get("overall", {})
-                            if isinstance(overall, dict):
-                                readiness["sleep_score"] = overall.get("value") or overall.get("qualifierKey")
-                        
-                        if not readiness["sleep_score"]:
-                            # Calculate from sleep time
-                            sleep_seconds = dto.get("sleepTimeSeconds", 0) or 0
-                            if sleep_seconds > 0:
-                                sleep_hours = sleep_seconds / 3600
-                                readiness["sleep_score"] = min(100, int(sleep_hours / 8 * 100))
+                    # Sleep score can be at root level or inside dailySleepDTO
+                    # First try root level sleepScores
+                    sleep_scores = sleep.get("sleepScores")
+                    if isinstance(sleep_scores, dict):
+                        overall = sleep_scores.get("overall", {})
+                        if isinstance(overall, dict):
+                            score = overall.get("value") or overall.get("qualifierKey")
+                            if score:
+                                readiness["sleep_score"] = score
                                 sleep_score_found = True
+                                print(f"[Sleep] Found score at root level: {score}")
+                    
+                    # If not found at root, try dailySleepDTO
+                    if not sleep_score_found:
+                        dto = sleep.get("dailySleepDTO", {})
+                        if dto:
+                            dto_scores = dto.get("sleepScores")
+                            if isinstance(dto_scores, dict):
+                                overall = dto_scores.get("overall", {})
+                                if isinstance(overall, dict):
+                                    score = overall.get("value") or overall.get("qualifierKey")
+                                    if score:
+                                        readiness["sleep_score"] = score
+                                        sleep_score_found = True
+                                        print(f"[Sleep] Found score in dto: {score}")
+                            
+                            # As last resort, calculate from sleep time
+                            if not sleep_score_found:
+                                sleep_seconds = dto.get("sleepTimeSeconds", 0) or 0
+                                if sleep_seconds > 0:
+                                    sleep_hours = sleep_seconds / 3600
+                                    readiness["sleep_score"] = min(100, int(sleep_hours / 8 * 100))
+                                    sleep_score_found = True
+                                    print(f"[Sleep] Calculated score from duration: {readiness['sleep_score']}")
             except Exception as e:
                 print(f"Error fetching sleep for {sleep_date}: {e}")
         
-        try:
-            # Get HRV status
-            hrv = self.get_hrv_data(today)
-            if hrv:
-                hrv_status = hrv.get("hrvSummary", {}).get("status")
-                readiness["hrv_status"] = hrv_status or "Unknown"
-        except Exception:
-            pass
+        # Get HRV status - try today first, then yesterday
+        for hrv_date in [today, yesterday]:
+            if readiness["hrv_status"] != "Unknown":
+                break
+            try:
+                hrv = self.get_hrv_data(hrv_date)
+                if hrv and isinstance(hrv, dict):
+                    hrv_summary = hrv.get("hrvSummary", {})
+                    if hrv_summary:
+                        hrv_status = hrv_summary.get("status")
+                        if hrv_status:
+                            readiness["hrv_status"] = hrv_status
+                            # Also get the average HRV value
+                            readiness["hrv_avg"] = hrv_summary.get("lastNightAvg")
+                            readiness["hrv_weekly_avg"] = hrv_summary.get("weeklyAvg")
+            except Exception as e:
+                print(f"Error fetching HRV for {hrv_date}: {e}")
         
         try:
             # Get training readiness if available
@@ -952,6 +981,183 @@ class GarminService:
         except Exception:
             return {}
     
+    def get_activity_typed_splits(self, activity_id: str) -> Dict[str, Any]:
+        """Get typed splits data for an activity (includes more detailed lap info)."""
+        self._ensure_authenticated()
+        try:
+            return self.client.get_activity_typed_splits(activity_id) or {}
+        except Exception:
+            return {}
+    
+    def get_activity_split_summaries(self, activity_id: str) -> Dict[str, Any]:
+        """Get split summaries for an activity."""
+        self._ensure_authenticated()
+        try:
+            return self.client.get_activity_split_summaries(activity_id) or {}
+        except Exception:
+            return {}
+    
+    def get_comprehensive_activity_data(self, activity_id: str) -> Dict[str, Any]:
+        """
+        Get comprehensive activity data including all available metrics.
+        This includes: basic details, splits, HR zones, weather, exercise sets,
+        gear, typed splits, and split summaries.
+        
+        Useful for detailed activity analysis and chart display.
+        """
+        self._ensure_authenticated()
+        
+        result = {
+            "activity_id": activity_id,
+            "activity": {},
+            "splits": {},
+            "typed_splits": {},
+            "split_summaries": {},
+            "hr_zones": {},
+            "weather": {},
+            "exercise_sets": {},
+            "gear": {},
+            "metrics": {
+                "has_stress": False,
+                "has_respiration": False,
+                "has_performance_condition": False,
+                "has_pace": False,
+                "has_cadence": False,
+                "has_power": False,
+                "has_stride_length": False,
+                "has_stamina": False,
+            }
+        }
+        
+        # Get basic activity details
+        try:
+            activity = self.client.get_activity(activity_id)
+            result["activity"] = activity or {}
+            
+            # Check what metrics are available in the activity
+            if activity:
+                # Check for various metrics
+                result["metrics"]["has_pace"] = bool(activity.get("averageSpeed"))
+                result["metrics"]["has_cadence"] = bool(
+                    activity.get("averageRunningCadenceInStepsPerMinute") or 
+                    activity.get("averageCadence")
+                )
+                result["metrics"]["has_stride_length"] = bool(activity.get("avgStrideLength"))
+                result["metrics"]["has_performance_condition"] = bool(
+                    activity.get("performanceCondition") or
+                    activity.get("firstBeatPerformanceCondition")
+                )
+                result["metrics"]["has_stamina"] = bool(
+                    activity.get("aerobicTrainingEffectMessage") or 
+                    activity.get("anaerobicTrainingEffectMessage")
+                )
+                result["metrics"]["has_power"] = bool(
+                    activity.get("avgPower") or 
+                    activity.get("normPower")
+                )
+        except Exception as e:
+            print(f"Error fetching activity {activity_id}: {e}")
+        
+        # Get detailed splits (contains HR/pace/cadence timeline data)
+        try:
+            splits = self.client.get_activity_splits(activity_id)
+            result["splits"] = splits or {}
+        except Exception as e:
+            print(f"Error fetching splits: {e}")
+        
+        # Get typed splits (more structured split data)
+        try:
+            typed_splits = self.client.get_activity_typed_splits(activity_id)
+            result["typed_splits"] = typed_splits or {}
+        except Exception as e:
+            print(f"Error fetching typed splits: {e}")
+        
+        # Get split summaries
+        try:
+            split_summaries = self.client.get_activity_split_summaries(activity_id)
+            result["split_summaries"] = split_summaries or {}
+        except Exception as e:
+            print(f"Error fetching split summaries: {e}")
+        
+        # Get HR zone distribution
+        try:
+            hr_zones = self.client.get_activity_hr_in_timezones(activity_id)
+            result["hr_zones"] = hr_zones or {}
+        except Exception as e:
+            print(f"Error fetching HR zones: {e}")
+        
+        # Get weather data
+        try:
+            weather = self.client.get_activity_weather(activity_id)
+            result["weather"] = weather or {}
+        except Exception as e:
+            print(f"Error fetching weather: {e}")
+        
+        # Get exercise sets (for strength training)
+        try:
+            exercise_sets = self.client.get_activity_exercise_sets(activity_id)
+            result["exercise_sets"] = exercise_sets or {}
+        except Exception as e:
+            print(f"Error fetching exercise sets: {e}")
+        
+        # Get gear
+        try:
+            gear = self.client.get_activity_gear(activity_id)
+            result["gear"] = gear or {}
+        except Exception as e:
+            print(f"Error fetching gear: {e}")
+        
+        # Extract key metrics from the activity for easy access
+        activity = result.get("activity", {})
+        result["summary"] = {
+            "name": activity.get("activityName"),
+            "type": activity.get("activityType", {}).get("typeKey", "other") if isinstance(activity.get("activityType"), dict) else "other",
+            "duration_seconds": activity.get("duration", 0),
+            "distance_meters": activity.get("distance", 0),
+            "calories": activity.get("calories", 0),
+            "avg_hr": activity.get("averageHR"),
+            "max_hr": activity.get("maxHR"),
+            "avg_speed": activity.get("averageSpeed"),
+            "max_speed": activity.get("maxSpeed"),
+            "elevation_gain": activity.get("elevationGain"),
+            "elevation_loss": activity.get("elevationLoss"),
+            "avg_cadence": activity.get("averageRunningCadenceInStepsPerMinute") or activity.get("averageCadence"),
+            "max_cadence": activity.get("maxRunningCadenceInStepsPerMinute") or activity.get("maxCadence"),
+            "avg_stride_length": activity.get("avgStrideLength"),
+            "performance_condition": activity.get("performanceCondition") or activity.get("firstBeatPerformanceCondition"),
+            "training_effect_aerobic": activity.get("aerobicTrainingEffect") or activity.get("trainingEffectAerobic"),
+            "training_effect_anaerobic": activity.get("anaerobicTrainingEffect") or activity.get("trainingEffectAnaerobic"),
+            "avg_respiration": activity.get("avgRespirationRate"),
+            "max_respiration": activity.get("maxRespirationRate"),
+            "avg_stress": activity.get("avgStressLevel"),
+            "max_stress": activity.get("maxStressLevel"),
+            "vo2max": activity.get("vO2MaxValue"),
+            "avg_power": activity.get("avgPower"),
+            "max_power": activity.get("maxPower"),
+            "normalized_power": activity.get("normPower"),
+            "training_load": activity.get("trainingLoad"),
+            "recovery_time": activity.get("recoveryTimeInMinutes"),
+            "start_time": activity.get("startTimeLocal"),
+        }
+        
+        # Update metrics flags based on summary
+        summary = result["summary"]
+        result["metrics"]["has_stress"] = summary["avg_stress"] is not None
+        result["metrics"]["has_respiration"] = summary["avg_respiration"] is not None
+        result["metrics"]["has_performance_condition"] = summary["performance_condition"] is not None
+        
+        return result
+    
+    def get_all_day_stress(self, stress_date: date) -> Dict[str, Any]:
+        """Get all-day stress data with timeline for a specific date."""
+        self._ensure_authenticated()
+        try:
+            date_str = stress_date.strftime("%Y-%m-%d")
+            return self.client.get_all_day_stress(date_str) or {}
+        except Exception as e:
+            print(f"Error fetching all-day stress: {e}")
+            return {}
+    
     # ==================== Workouts & Training Plans ====================
     
     def get_workouts(self, start: int = 0, limit: int = 100) -> Dict[str, Any]:
@@ -974,9 +1180,323 @@ class GarminService:
         """Upload a workout to Garmin Connect."""
         self._ensure_authenticated()
         try:
-            return self.client.upload_workout(workout_data) or {}
+            result = self.client.upload_workout(workout_data)
+            return result or {"success": True}
         except Exception as e:
             return {"error": str(e)}
+    
+    def upload_running_workout_structured(self, workout_name: str, steps: List[Dict[str, Any]], 
+                                          estimated_duration_secs: int = 3600) -> Dict[str, Any]:
+        """Upload a properly structured running workout to Garmin Connect.
+        
+        Uses the official garminconnect.workout typed models for proper API compatibility.
+        
+        Args:
+            workout_name: Name of the workout
+            steps: List of workout steps with type, duration, and targets
+            estimated_duration_secs: Total estimated duration in seconds
+        
+        Returns:
+            Dict with upload result or error
+        """
+        self._ensure_authenticated()
+        try:
+            # Try to use the typed workout models from garminconnect
+            try:
+                from garminconnect.workout import (
+                    RunningWorkout, WorkoutSegment, ExecutableStep, RepeatGroup,
+                    create_warmup_step, create_interval_step, create_recovery_step, create_cooldown_step,
+                    create_repeat_group, StepType, ConditionType, TargetType
+                )
+                
+                # Build workout steps using typed models
+                workout_steps = []
+                step_order = 1
+                
+                for step in steps:
+                    garmin_step = self._build_typed_garmin_step(step, step_order)
+                    if garmin_step:
+                        workout_steps.append(garmin_step)
+                        step_order += 1
+                
+                # Create the workout using typed models
+                workout = RunningWorkout(
+                    workoutName=workout_name,
+                    estimatedDurationInSecs=estimated_duration_secs,
+                    workoutSegments=[
+                        WorkoutSegment(
+                            segmentOrder=1,
+                            sportType={"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
+                            workoutSteps=workout_steps
+                        )
+                    ]
+                )
+                
+                # Upload using the typed method
+                result = self.client.upload_running_workout(workout)
+                
+            except ImportError:
+                # Fallback to dict-based upload if typed models not available
+                workout_steps = []
+                step_order = 1
+                
+                for step in steps:
+                    garmin_step = self._build_garmin_step_dict(step, step_order)
+                    workout_steps.append(garmin_step)
+                    step_order += 1
+                
+                workout_data = {
+                    "workoutName": workout_name,
+                    "sportType": {
+                        "sportTypeId": 1,
+                        "sportTypeKey": "running",
+                        "displayOrder": 1
+                    },
+                    "estimatedDurationInSecs": estimated_duration_secs,
+                    "workoutSegments": [{
+                        "segmentOrder": 1,
+                        "sportType": {
+                            "sportTypeId": 1,
+                            "sportTypeKey": "running",
+                            "displayOrder": 1
+                        },
+                        "workoutSteps": workout_steps
+                    }]
+                }
+                
+                result = self.client.upload_workout(workout_data)
+            
+            if result:
+                return {
+                    "success": True,
+                    "workoutId": result.get("workoutId"),
+                    "workoutName": workout_name,
+                    "message": f"Workout '{workout_name}' uploaded successfully to Garmin Connect"
+                }
+            return {"success": True, "message": "Workout uploaded"}
+            
+        except Exception as e:
+            import traceback
+            return {"error": str(e), "details": traceback.format_exc(), "success": False}
+    
+    def _build_typed_garmin_step(self, step: Dict[str, Any], order: int):
+        """Build a Garmin workout step using typed models."""
+        try:
+            from garminconnect.workout import (
+                ExecutableStep, StepType, ConditionType, TargetType
+            )
+            
+            step_type = step.get("type", "active").lower()
+            duration_minutes = step.get("duration_minutes", 0)
+            duration_seconds = duration_minutes * 60 if duration_minutes else 300
+            
+            # Map step types
+            type_map = {
+                "warmup": (StepType.WARMUP, "warmup"),
+                "cooldown": (StepType.COOLDOWN, "cooldown"),
+                "active": (StepType.INTERVAL, "interval"),
+                "interval": (StepType.INTERVAL, "interval"),
+                "recovery": (StepType.RECOVERY, "recovery"),
+                "rest": (StepType.REST, "rest"),
+            }
+            
+            step_type_id, step_type_key = type_map.get(step_type, (StepType.INTERVAL, "interval"))
+            
+            # Build target type
+            target_type = step.get("target_type", "open")
+            target_pace_min = step.get("target_pace_min")
+            
+            target_dict = {
+                "workoutTargetTypeId": TargetType.NO_TARGET,
+                "workoutTargetTypeKey": "no.target",
+                "displayOrder": 1
+            }
+            
+            # For pace targets, we need to set speed values
+            target_value_one = None
+            target_value_two = None
+            
+            if target_type == "pace" and target_pace_min and isinstance(target_pace_min, str) and ":" in target_pace_min:
+                try:
+                    parts = target_pace_min.split(":")
+                    if len(parts) == 2:
+                        minutes = int(parts[0])
+                        seconds = int(parts[1])
+                        total_secs = minutes * 60 + seconds
+                        if total_secs > 0:
+                            speed_ms = 1000 / total_secs
+                            # Speed target - low is slower pace (lower speed), high is faster pace (higher speed)
+                            target_value_one = round(speed_ms * 0.95, 4)  # 5% slower
+                            target_value_two = round(speed_ms * 1.05, 4)  # 5% faster
+                            target_dict = {
+                                "workoutTargetTypeId": TargetType.SPEED,
+                                "workoutTargetTypeKey": "speed.zone",
+                                "displayOrder": 4
+                            }
+                except:
+                    pass
+            
+            return ExecutableStep(
+                stepOrder=order,
+                stepType={
+                    "stepTypeId": step_type_id,
+                    "stepTypeKey": step_type_key,
+                    "displayOrder": step_type_id
+                },
+                endCondition={
+                    "conditionTypeId": ConditionType.TIME,
+                    "conditionTypeKey": "time",
+                    "displayOrder": 2,
+                    "displayable": True
+                },
+                endConditionValue=float(duration_seconds),
+                targetType=target_dict,
+                targetValueOne=target_value_one,
+                targetValueTwo=target_value_two
+            )
+            
+        except Exception as e:
+            print(f"Error building typed step: {e}")
+            return None
+    
+    def _build_garmin_step_dict(self, step: Dict[str, Any], order: int) -> Dict[str, Any]:
+        """Build a single Garmin workout step as a dictionary (fallback method)."""
+        step_type = step.get("type", "active").lower()
+        
+        # Map step types to Garmin step types (using official IDs from garminconnect.workout)
+        type_map = {
+            "warmup": {"stepTypeId": 1, "stepTypeKey": "warmup", "displayOrder": 1},
+            "cooldown": {"stepTypeId": 2, "stepTypeKey": "cooldown", "displayOrder": 2},
+            "interval": {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3},
+            "active": {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3},
+            "recovery": {"stepTypeId": 4, "stepTypeKey": "recovery", "displayOrder": 4},
+            "rest": {"stepTypeId": 5, "stepTypeKey": "rest", "displayOrder": 5},
+            "repeat": {"stepTypeId": 6, "stepTypeKey": "repeat", "displayOrder": 6},
+        }
+        
+        step_type_info = type_map.get(step_type, {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3})
+        
+        garmin_step = {
+            "type": "ExecutableStepDTO",
+            "stepOrder": order,
+            "stepType": step_type_info,
+            "childStepId": None,
+        }
+        
+        # Set duration
+        duration_minutes = step.get("duration_minutes")
+        distance_meters = step.get("distance_meters")
+        
+        if duration_minutes:
+            garmin_step["endCondition"] = {
+                "conditionTypeId": 2,
+                "conditionTypeKey": "time",
+                "displayOrder": 2,
+                "displayable": True
+            }
+            garmin_step["endConditionValue"] = float(duration_minutes * 60)  # seconds
+        elif distance_meters:
+            garmin_step["endCondition"] = {
+                "conditionTypeId": 1,
+                "conditionTypeKey": "distance",
+                "displayOrder": 1,
+                "displayable": True
+            }
+            garmin_step["endConditionValue"] = float(distance_meters)  # meters
+        else:
+            garmin_step["endCondition"] = {
+                "conditionTypeId": 1,
+                "conditionTypeKey": "lap.button",
+                "displayOrder": 1,
+                "displayable": True
+            }
+            garmin_step["endConditionValue"] = None
+        
+        # Set target (pace or heart rate)
+        target_type = step.get("target_type", "open")
+        target_pace_min = step.get("target_pace_min")
+        target_hr_zone = step.get("target_hr_zone")
+        
+        if target_type == "pace" and target_pace_min and isinstance(target_pace_min, str) and ":" in target_pace_min:
+            try:
+                pace_parts = target_pace_min.split(":")
+                if len(pace_parts) == 2:
+                    minutes = int(pace_parts[0])
+                    seconds = int(pace_parts[1])
+                    total_seconds = minutes * 60 + seconds
+                    if total_seconds > 0:
+                        speed_ms = 1000 / total_seconds
+                        speed_ms_low = speed_ms * 0.95
+                        
+                        target_pace_max = step.get("target_pace_max")
+                        if target_pace_max and isinstance(target_pace_max, str) and ":" in target_pace_max:
+                            pace_parts_max = target_pace_max.split(":")
+                            if len(pace_parts_max) == 2:
+                                max_total_seconds = int(pace_parts_max[0]) * 60 + int(pace_parts_max[1])
+                                if max_total_seconds > 0:
+                                    speed_ms_low = 1000 / max_total_seconds
+                        
+                        garmin_step["targetType"] = {
+                            "workoutTargetTypeId": 4,
+                            "workoutTargetTypeKey": "speed.zone",
+                            "displayOrder": 4
+                        }
+                        garmin_step["targetValueOne"] = round(speed_ms_low, 4)
+                        garmin_step["targetValueTwo"] = round(speed_ms * 1.05, 4)
+            except (ValueError, TypeError):
+                pass
+        
+        if "targetType" not in garmin_step and target_type == "heart_rate" and target_hr_zone:
+            garmin_step["targetType"] = {
+                "workoutTargetTypeId": 2,
+                "workoutTargetTypeKey": "heart.rate.zone",
+                "displayOrder": 2
+            }
+            garmin_step["targetValueOne"] = target_hr_zone
+            garmin_step["targetValueTwo"] = None
+        
+        if "targetType" not in garmin_step:
+            garmin_step["targetType"] = {
+                "workoutTargetTypeId": 1,
+                "workoutTargetTypeKey": "no.target",
+                "displayOrder": 1
+            }
+            garmin_step["targetValueOne"] = None
+            garmin_step["targetValueTwo"] = None
+        
+        # Handle repeat steps
+        if step_type == "repeat" and step.get("repeat_steps"):
+            garmin_step["type"] = "RepeatGroupDTO"
+            garmin_step["numberOfIterations"] = step.get("repeat_count", 1)
+            garmin_step["smartRepeat"] = False
+            child_steps = []
+            for i, child in enumerate(step.get("repeat_steps", [])):
+                child_steps.append(self._build_garmin_step_dict(child, i + 1))
+            garmin_step["workoutSteps"] = child_steps
+        
+        return garmin_step
+    
+    def schedule_workout(self, workout_id: int, schedule_date: str) -> Dict[str, Any]:
+        """Schedule a workout for a specific date.
+        
+        Args:
+            workout_id: The ID of the workout to schedule
+            schedule_date: Date in YYYY-MM-DD format
+        
+        Returns:
+            Dict with schedule result
+        """
+        self._ensure_authenticated()
+        try:
+            # Garmin API for scheduling workouts
+            # This creates a scheduled workout entry
+            result = self.client.schedule_workout(workout_id, schedule_date)
+            return result or {"success": True}
+        except AttributeError:
+            # Method might not exist in all versions
+            return {"error": "Workout scheduling not supported in this version", "success": False}
+        except Exception as e:
+            return {"error": str(e), "success": False}
     
     # ==================== Devices ====================
     
@@ -1194,6 +1714,7 @@ class GarminService:
         
         end_date = date.today()
         start_date = end_date - timedelta(days=days)
+        yesterday = end_date - timedelta(days=1)
         
         data = {
             "user_profile": self.get_user_profile(),
@@ -1202,11 +1723,21 @@ class GarminService:
             "sleep_data": [],
             "health_summary": {},
             "activity_summary": {},
+            # New comprehensive data
+            "body_battery": [],
+            "hrv_data": [],
+            "stress_data": [],
+            "performance_metrics": {},
+            "today_readiness": {},
+            "personal_records": {},
+            "intensity_minutes": {},
+            "training_status": {},
         }
         
         try:
-            # Fetch activities
-            data["activities"] = self.get_activities_by_date(start_date, end_date)
+            # Fetch activities with enriched details
+            activities = self.get_activities_by_date(start_date, end_date)
+            data["activities"] = [self.enrich_activity(a) for a in activities]
         except Exception:
             pass
         
@@ -1233,6 +1764,78 @@ class GarminService:
                     data["sleep_data"].append(sleep)
                 except Exception:
                     pass
+        except Exception:
+            pass
+        
+        # Fetch body battery data for trend analysis
+        try:
+            for i in range(min(days, 7)):
+                current_date = end_date - timedelta(days=i)
+                try:
+                    bb = self.get_body_battery_detailed(current_date)
+                    if bb and bb.get("current_value"):
+                        data["body_battery"].append(bb)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        
+        # Fetch HRV data for trend analysis
+        try:
+            for i in range(min(days, 7)):
+                current_date = end_date - timedelta(days=i)
+                try:
+                    hrv = self.get_hrv_data(current_date)
+                    if hrv and isinstance(hrv, dict) and hrv.get("hrvSummary"):
+                        hrv["date"] = current_date.strftime("%Y-%m-%d")
+                        data["hrv_data"].append(hrv)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        
+        # Fetch today's readiness
+        try:
+            data["today_readiness"] = self.get_today_readiness()
+        except Exception:
+            pass
+        
+        # Fetch performance metrics (VO2max, fitness age, etc.)
+        try:
+            max_metrics = self.get_max_metrics(yesterday)
+            fitness_age = self.get_fitness_age(yesterday)
+            endurance = self.get_endurance_score(yesterday)
+            hill_score = self.get_hill_score(yesterday)
+            
+            data["performance_metrics"] = {
+                "vo2_max": max_metrics.get("generic", {}).get("vo2MaxPreciseValue") if max_metrics else None,
+                "vo2_max_running": max_metrics.get("cycling", {}).get("vo2MaxPreciseValue") if max_metrics else None,
+                "fitness_age": fitness_age.get("chronologicalAge") if fitness_age else None,
+                "endurance_score": endurance.get("overallScore") if endurance else None,
+                "hill_score": hill_score.get("hillScore") if hill_score else None,
+                "training_load_7d": max_metrics.get("generic", {}).get("trainingLoad7d") if max_metrics else None,
+                "training_status": max_metrics.get("generic", {}).get("trainingStatus") if max_metrics else None,
+                "training_status_description": max_metrics.get("generic", {}).get("trainingStatusDescription") if max_metrics else None,
+                "recovery_time_hours": max_metrics.get("generic", {}).get("recoveryTimeInHours") if max_metrics else None,
+            }
+        except Exception:
+            pass
+        
+        # Fetch personal records
+        try:
+            data["personal_records"] = self.get_personal_records()
+        except Exception:
+            pass
+        
+        # Fetch intensity minutes
+        try:
+            data["intensity_minutes"] = self.get_intensity_minutes()
+        except Exception:
+            pass
+        
+        # Fetch HR zones
+        try:
+            data["hr_zones"] = self.get_hr_zones()
         except Exception:
             pass
         

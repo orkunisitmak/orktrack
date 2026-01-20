@@ -47,9 +47,10 @@ class ActivityStatsResponse(BaseModel):
 @router.get("/recent", response_model=ActivityListResponse)
 async def get_recent_activities(
     limit: int = Query(default=20, le=100),
-    activity_type: Optional[str] = None
+    activity_type: Optional[str] = None,
+    include_details: bool = Query(default=True, description="Include detailed metrics like stress, respiration")
 ):
-    """Get recent activities."""
+    """Get recent activities with optional detailed metrics."""
     try:
         garmin = get_garmin_service()
         
@@ -57,6 +58,36 @@ async def get_recent_activities(
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         activities = garmin.get_activities(limit=limit, activity_type=activity_type)
+        
+        # Enrich activities with detailed metrics if requested
+        if include_details and activities:
+            enriched_activities = []
+            for activity in activities:
+                try:
+                    activity_id = str(activity.get("activityId", ""))
+                    if activity_id:
+                        # Fetch detailed data for each activity
+                        details = garmin.get_activity_details(activity_id)
+                        if details:
+                            # Merge detailed metrics into the activity
+                            activity["avgStressLevel"] = details.get("avgStressLevel")
+                            activity["maxStressLevel"] = details.get("maxStressLevel")
+                            activity["avgRespirationRate"] = details.get("avgRespirationRate")
+                            activity["maxRespirationRate"] = details.get("maxRespirationRate")
+                            activity["performanceCondition"] = details.get("performanceCondition")
+                            activity["firstBeatPerformanceCondition"] = details.get("firstBeatPerformanceCondition")
+                            activity["avgStrideLength"] = details.get("avgStrideLength")
+                            activity["avgPower"] = details.get("avgPower")
+                            activity["maxPower"] = details.get("maxPower")
+                            activity["normPower"] = details.get("normPower") or details.get("normalizedPower")
+                            activity["trainingLoad"] = details.get("trainingLoad") or details.get("activityTrainingLoad")
+                            activity["recoveryTimeInMinutes"] = details.get("recoveryTimeInMinutes")
+                    enriched_activities.append(activity)
+                except Exception as e:
+                    # If we can't get details, just use the basic activity data
+                    print(f"Warning: Could not fetch details for activity {activity.get('activityId')}: {e}")
+                    enriched_activities.append(activity)
+            activities = enriched_activities
         
         return ActivityListResponse(
             activities=activities,
@@ -206,11 +237,14 @@ async def get_activity_full_details(activity_id: str):
     """
     Get comprehensive activity details including:
     - Basic activity data
-    - Splits/laps
+    - Splits/laps with detailed metrics
+    - Typed splits (more structured)
+    - Split summaries
     - HR zone distribution
-    - Weather
+    - Weather (actual temperature, conditions)
     - Exercise sets (for strength)
     - Gear
+    - Stress, respiration, cadence, stride length, performance condition
     """
     try:
         garmin = get_garmin_service()
@@ -218,47 +252,147 @@ async def get_activity_full_details(activity_id: str):
         if not garmin.is_authenticated:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
-        # Fetch all available data
-        result = {
-            "activity": {},
-            "splits": {},
-            "hr_zones": {},
-            "weather": {},
-            "exercise_sets": {},
-            "gear": {},
-        }
-        
-        try:
-            result["activity"] = garmin.get_activity_details(activity_id)
-        except Exception:
-            pass
-        
-        try:
-            result["splits"] = garmin.get_activity_splits(activity_id)
-        except Exception:
-            pass
-        
-        try:
-            result["hr_zones"] = garmin.get_activity_hr_zones(activity_id)
-        except Exception:
-            pass
-        
-        try:
-            result["weather"] = garmin.get_activity_weather(activity_id)
-        except Exception:
-            pass
-        
-        try:
-            result["exercise_sets"] = garmin.get_activity_exercise_sets(activity_id)
-        except Exception:
-            pass
-        
-        try:
-            result["gear"] = garmin.get_activity_gear(activity_id)
-        except Exception:
-            pass
+        # Use the new comprehensive method
+        result = garmin.get_comprehensive_activity_data(activity_id)
         
         return result
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{activity_id}/metrics")
+async def get_activity_metrics(activity_id: str):
+    """
+    Get detailed metrics for an activity suitable for chart display.
+    Returns: pace, heart rate, stress, respiration, cadence, stride length, 
+    performance condition timeline data when available.
+    """
+    try:
+        garmin = get_garmin_service()
+        
+        if not garmin.is_authenticated:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get comprehensive data
+        full_data = garmin.get_comprehensive_activity_data(activity_id)
+        
+        # Extract chart-friendly data
+        result = {
+            "activity_id": activity_id,
+            "summary": full_data.get("summary", {}),
+            "available_metrics": full_data.get("metrics", {}),
+            "weather": full_data.get("weather", {}),
+            "hr_zones": full_data.get("hr_zones", {}),
+            "splits": [],
+            "charts": {
+                "has_data": False,
+                "heart_rate": [],
+                "pace": [],
+                "cadence": [],
+                "stress": [],
+                "respiration": [],
+                "elevation": [],
+                "power": [],
+            }
+        }
+        
+        # Process splits into chart-friendly format
+        splits_data = full_data.get("splits", {})
+        if splits_data and isinstance(splits_data, dict):
+            lap_list = splits_data.get("lapDTOs", []) or splits_data.get("laps", [])
+            if lap_list:
+                for i, lap in enumerate(lap_list):
+                    split_info = {
+                        "lap_number": i + 1,
+                        "duration_seconds": lap.get("duration"),
+                        "distance_meters": lap.get("distance"),
+                        "avg_hr": lap.get("averageHR"),
+                        "max_hr": lap.get("maxHR"),
+                        "avg_speed": lap.get("averageSpeed"),
+                        "avg_cadence": lap.get("averageRunningCadenceInStepsPerMinute") or lap.get("avgCadence"),
+                        "elevation_gain": lap.get("elevationGain"),
+                        "elevation_loss": lap.get("elevationLoss"),
+                        "avg_respiration": lap.get("avgRespirationRate"),
+                        "avg_stress": lap.get("avgStressLevel"),
+                    }
+                    
+                    # Calculate pace (min/km) if we have speed
+                    if split_info["avg_speed"] and split_info["avg_speed"] > 0:
+                        pace_sec_per_km = 1000 / split_info["avg_speed"]
+                        pace_min = int(pace_sec_per_km // 60)
+                        pace_sec = int(pace_sec_per_km % 60)
+                        split_info["pace_min_km"] = f"{pace_min}:{pace_sec:02d}"
+                    
+                    result["splits"].append(split_info)
+                    
+                    # Add to charts
+                    if split_info["avg_hr"]:
+                        result["charts"]["heart_rate"].append({
+                            "lap": i + 1,
+                            "value": split_info["avg_hr"],
+                            "max": split_info.get("max_hr")
+                        })
+                        result["charts"]["has_data"] = True
+                    
+                    if split_info["avg_speed"]:
+                        result["charts"]["pace"].append({
+                            "lap": i + 1,
+                            "value": split_info.get("pace_min_km"),
+                            "speed_ms": split_info["avg_speed"]
+                        })
+                        result["charts"]["has_data"] = True
+                    
+                    if split_info["avg_cadence"]:
+                        result["charts"]["cadence"].append({
+                            "lap": i + 1,
+                            "value": split_info["avg_cadence"]
+                        })
+                        result["charts"]["has_data"] = True
+                    
+                    if split_info["avg_stress"]:
+                        result["charts"]["stress"].append({
+                            "lap": i + 1,
+                            "value": split_info["avg_stress"]
+                        })
+                        result["charts"]["has_data"] = True
+                    
+                    if split_info["avg_respiration"]:
+                        result["charts"]["respiration"].append({
+                            "lap": i + 1,
+                            "value": split_info["avg_respiration"]
+                        })
+                        result["charts"]["has_data"] = True
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{activity_id}/typed-splits")
+async def get_activity_typed_splits(activity_id: str):
+    """Get typed splits data for an activity."""
+    try:
+        garmin = get_garmin_service()
+        
+        if not garmin.is_authenticated:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        return garmin.get_activity_typed_splits(activity_id)
+    except Exception as e:
+        return {}
+
+
+@router.get("/{activity_id}/split-summaries")
+async def get_activity_split_summaries(activity_id: str):
+    """Get split summaries for an activity."""
+    try:
+        garmin = get_garmin_service()
+        
+        if not garmin.is_authenticated:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        return garmin.get_activity_split_summaries(activity_id)
+    except Exception as e:
+        return {}

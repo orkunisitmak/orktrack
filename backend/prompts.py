@@ -5,7 +5,7 @@ Based on the VDOT/Polarized Training approach with autoregulation.
 """
 
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def safe_format(value, fmt=",") -> str:
@@ -170,106 +170,241 @@ Generate the JSON workout file now."""
         activities: List[Dict[str, Any]],
         period: str = "week",
         focus_areas: Optional[List[str]] = None,
+        # New comprehensive data parameters
+        body_battery: Optional[List[Dict[str, Any]]] = None,
+        hrv_data: Optional[List[Dict[str, Any]]] = None,
+        performance_metrics: Optional[Dict[str, Any]] = None,
+        today_readiness: Optional[Dict[str, Any]] = None,
+        personal_records: Optional[Dict[str, Any]] = None,
+        intensity_minutes: Optional[Dict[str, Any]] = None,
+        hr_zones: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Build a structured health insights prompt."""
+        """Build a structured health insights prompt with comprehensive data."""
+        
+        # Initialize optional data
+        body_battery = body_battery or []
+        hrv_data = hrv_data or []
+        performance_metrics = performance_metrics or {}
+        today_readiness = today_readiness or {}
+        personal_records = personal_records or {}
+        intensity_minutes = intensity_minutes or {}
+        hr_zones = hr_zones or {}
         
         # Calculate sleep averages safely
         avg_sleep = 0
         avg_deep = 0
+        avg_rem = 0
+        avg_light = 0
+        sleep_scores = []
         if sleep_data:
             try:
-                total_sleep = sum(
-                    (s.get("dailySleepDTO", {}).get("sleepTimeSeconds", 0) or 0) / 3600
-                    for s in sleep_data
-                )
-                avg_sleep = total_sleep / len(sleep_data)
+                for s in sleep_data:
+                    dto = s.get("dailySleepDTO", {})
+                    if dto.get("sleepTimeSeconds"):
+                        avg_sleep += (dto.get("sleepTimeSeconds", 0) or 0) / 3600
+                    if dto.get("deepSleepSeconds"):
+                        avg_deep += (dto.get("deepSleepSeconds", 0) or 0) / 3600
+                    if dto.get("remSleepSeconds"):
+                        avg_rem += (dto.get("remSleepSeconds", 0) or 0) / 3600
+                    if dto.get("lightSleepSeconds"):
+                        avg_light += (dto.get("lightSleepSeconds", 0) or 0) / 3600
+                    if dto.get("sleepScores", {}).get("overall", {}).get("value"):
+                        sleep_scores.append(dto["sleepScores"]["overall"]["value"])
                 
-                total_deep = sum(
-                    (s.get("dailySleepDTO", {}).get("deepSleepSeconds", 0) or 0) / 3600
-                    for s in sleep_data
-                )
-                avg_deep = total_deep / len(sleep_data)
+                if len(sleep_data) > 0:
+                    avg_sleep /= len(sleep_data)
+                    avg_deep /= len(sleep_data)
+                    avg_rem /= len(sleep_data)
+                    avg_light /= len(sleep_data)
             except Exception:
                 pass
+        
+        avg_sleep_score = sum(sleep_scores) / len(sleep_scores) if sleep_scores else 0
         
         # Calculate activity metrics safely
         total_activities = len(activities) if activities else 0
         total_duration = 0
+        total_distance = 0
+        total_calories = 0
+        avg_hr = []
+        training_effects = []
+        activity_breakdown = {}
+        
         if activities:
             try:
-                total_duration = sum(
-                    (a.get("duration", 0) or 0) / 60
-                    for a in activities
-                )
+                for a in activities:
+                    duration = (a.get("duration", 0) or 0) / 60
+                    total_duration += duration
+                    total_distance += (a.get("distance", 0) or 0) / 1000  # Convert to km
+                    total_calories += a.get("calories", 0) or 0
+                    
+                    if a.get("averageHR"):
+                        avg_hr.append(a["averageHR"])
+                    
+                    te = a.get("aerobicTrainingEffect") or a.get("trainingEffectAerobic")
+                    if te:
+                        training_effects.append(te)
+                    
+                    # Track activity types
+                    act_type = a.get("classified_type") or a.get("activityType", {}).get("typeKey", "other")
+                    activity_breakdown[act_type] = activity_breakdown.get(act_type, 0) + 1
             except Exception:
                 pass
         
+        avg_workout_hr = sum(avg_hr) / len(avg_hr) if avg_hr else 0
+        avg_training_effect = sum(training_effects) / len(training_effects) if training_effects else 0
+        
+        # Calculate body battery trend
+        bb_values = []
+        bb_trend = "stable"
+        for bb in body_battery:
+            if bb.get("current_value"):
+                bb_values.append(bb["current_value"])
+        if len(bb_values) >= 2:
+            if bb_values[0] > bb_values[-1] + 10:
+                bb_trend = "declining"
+            elif bb_values[0] < bb_values[-1] - 10:
+                bb_trend = "improving"
+        
+        # Calculate HRV trend
+        hrv_values = []
+        hrv_statuses = []
+        hrv_trend = "stable"
+        for hrv in hrv_data:
+            summary = hrv.get("hrvSummary", {})
+            if summary.get("lastNightAvg"):
+                hrv_values.append(summary["lastNightAvg"])
+            if summary.get("status"):
+                hrv_statuses.append(summary["status"])
+        if len(hrv_values) >= 2:
+            if hrv_values[0] > hrv_values[-1] + 5:
+                hrv_trend = "declining"
+            elif hrv_values[0] < hrv_values[-1] - 5:
+                hrv_trend = "improving"
+        
         system_prompt = """### SYSTEM ROLE
 You are a certified Health Coach and Exercise Physiologist specializing in data-driven wellness optimization. 
-Analyze the provided health telemetry and provide actionable, personalized insights.
+Analyze the provided comprehensive health telemetry and provide detailed, actionable, personalized insights.
 
 ### ANALYSIS FRAMEWORK
-1. **Sleep Quality:** Analyze duration, deep sleep %, and consistency
-2. **Recovery Status:** Evaluate HRV, resting HR trends, body battery
-3. **Training Load:** Assess volume, intensity distribution, and recovery balance
-4. **Stress Management:** Identify stress patterns and recommend interventions
+1. **Sleep Quality:** Analyze duration, deep/REM/light sleep distribution, sleep scores, and consistency
+2. **Recovery Status:** Evaluate HRV trends, resting HR, body battery patterns, and training readiness
+3. **Training Load:** Assess volume, intensity distribution, training effect, and recovery balance
+4. **Performance Metrics:** Analyze VO2max, fitness age, endurance score, and training status
+5. **Stress Management:** Identify stress patterns and recommend interventions
+6. **Body Composition:** Track body battery energy management and charging/draining patterns
 
 ### CONSTRAINTS
-1. Be specific with numbers and percentages
-2. Compare to recommended guidelines (7-9hrs sleep, <60bpm RHR for fit individuals)
-3. Provide 2-3 actionable recommendations per area
+1. Be specific with numbers, percentages, and trends
+2. Compare to recommended guidelines (7-9hrs sleep, <60bpm RHR for fit individuals, HRV baseline)
+3. Provide 2-3 actionable recommendations per area with specific timing
 4. Acknowledge positive trends while addressing areas for improvement
-5. Output must be valid JSON
+5. Include comparisons to previous periods when data is available
+6. Output must be valid JSON
 
 ### OUTPUT SCHEMA (JSON)
 {
   "overall_score": Number (0-100),
-  "overall_assessment": "String summary",
+  "overall_assessment": "String - detailed summary of health status",
   "period_summary": {
     "start_date": "YYYY-MM-DD",
     "end_date": "YYYY-MM-DD",
     "total_activities": Number,
     "total_duration_hours": Number,
-    "avg_sleep_hours": Number
+    "total_distance_km": Number,
+    "avg_sleep_hours": Number,
+    "avg_sleep_score": Number
   },
   "highlights": [
     {
-      "type": "positive | warning | info",
-      "category": "sleep | activity | recovery | stress",
+      "type": "positive | warning | info | achievement",
+      "category": "sleep | activity | recovery | stress | performance",
       "title": "String",
-      "description": "String",
+      "description": "String - detailed explanation",
       "metric": "String",
-      "value": "String"
+      "value": "String",
+      "trend": "improving | stable | declining | null",
+      "action": "String - specific action to take"
     }
   ],
   "sleep_analysis": {
     "quality_rating": "Excellent | Good | Fair | Poor",
     "avg_duration_hours": Number,
-    "avg_deep_sleep_hours": Number,
-    "consistency_score": Number,
-    "insights": ["String"],
-    "recommendations": ["String"]
+    "avg_sleep_score": Number,
+    "sleep_stages": {
+      "deep_hours": Number,
+      "rem_hours": Number,
+      "light_hours": Number,
+      "deep_percentage": Number
+    },
+    "consistency_score": Number (0-100),
+    "sleep_debt_hours": Number,
+    "insights": ["String - specific findings"],
+    "recommendations": ["String - actionable advice with timing"]
   },
   "activity_analysis": {
     "consistency_rating": "Excellent | Good | Fair | Poor",
     "volume_trend": "increasing | stable | decreasing",
+    "total_distance_km": Number,
+    "avg_training_effect": Number,
     "intensity_distribution": {
-      "low": Number,
-      "moderate": Number,
-      "high": Number
+      "low_percentage": Number,
+      "moderate_percentage": Number,
+      "high_percentage": Number
     },
+    "activity_breakdown": {"activity_type": count},
+    "training_load_status": "Optimal | High | Low | Recovery Needed",
     "insights": ["String"],
     "recommendations": ["String"]
   },
   "recovery_analysis": {
     "status": "Excellent | Good | Fair | Needs Attention",
     "avg_resting_hr": Number,
-    "hrv_trend": "improving | stable | declining",
+    "resting_hr_trend": "improving | stable | elevated",
+    "hrv_analysis": {
+      "avg_hrv": Number,
+      "hrv_trend": "improving | stable | declining",
+      "hrv_status": "Balanced | Unbalanced | Low"
+    },
+    "body_battery_analysis": {
+      "current_level": Number,
+      "trend": "improving | stable | declining",
+      "avg_charge": Number,
+      "avg_drain": Number
+    },
+    "recovery_time_hours": Number,
     "insights": ["String"],
     "recommendations": ["String"]
   },
-  "weekly_focus": "String - One key area to prioritize",
-  "motivational_message": "String - Personalized encouragement"
+  "performance_analysis": {
+    "vo2_max": Number,
+    "vo2_max_trend": "improving | stable | declining",
+    "fitness_age": Number,
+    "fitness_age_vs_actual": Number,
+    "endurance_score": Number,
+    "training_status": "String",
+    "training_status_description": "String",
+    "insights": ["String"],
+    "recommendations": ["String"]
+  },
+  "stress_analysis": {
+    "avg_stress_level": Number,
+    "stress_trend": "improving | stable | worsening",
+    "high_stress_periods": ["String - time patterns"],
+    "insights": ["String"],
+    "recommendations": ["String"]
+  },
+  "weekly_focus": "String - One key area to prioritize based on the analysis period",
+  "action_plan": [
+    {
+      "priority": 1,
+      "area": "String",
+      "action": "String - specific action",
+      "timing": "String - when to do it",
+      "expected_impact": "String"
+    }
+  ],
+  "motivational_message": "String - Personalized encouragement based on data"
 }
 """
 
@@ -281,34 +416,106 @@ Analyze the provided health telemetry and provide actionable, personalized insig
         avg_rhr = health_data.get('avg_resting_hr') or 'N/A'
         avg_stress = health_data.get('avg_stress') or 'N/A'
         active_mins = safe_format(health_data.get('total_active_minutes', 0))
-        total_cals = safe_format(health_data.get('total_calories', 0))
+        total_cals_health = safe_format(health_data.get('total_calories', 0))
+        
+        # Format performance metrics
+        vo2max = performance_metrics.get("vo2_max") or "N/A"
+        fitness_age = performance_metrics.get("fitness_age") or "N/A"
+        endurance_score = performance_metrics.get("endurance_score") or "N/A"
+        training_status = performance_metrics.get("training_status") or "N/A"
+        training_load_7d = performance_metrics.get("training_load_7d") or "N/A"
+        recovery_time = performance_metrics.get("recovery_time_hours") or "N/A"
+        
+        # Format today's readiness
+        current_bb = today_readiness.get("body_battery") or "N/A"
+        current_hrv_status = today_readiness.get("hrv_status") or "Unknown"
+        current_hrv_avg = today_readiness.get("hrv_avg") or "N/A"
+        readiness_score = today_readiness.get("readiness_score") or "N/A"
+        
+        # Format HRV data
+        avg_hrv_value = sum(hrv_values) / len(hrv_values) if hrv_values else "N/A"
+        most_common_hrv_status = max(set(hrv_statuses), key=hrv_statuses.count) if hrv_statuses else "Unknown"
+        
+        # Format intensity minutes
+        weekly_vigorous = intensity_minutes.get("weeklyVigorous", 0) or 0
+        weekly_moderate = intensity_minutes.get("weeklyModerate", 0) or 0
+        weekly_goal = intensity_minutes.get("weeklyGoal", 150) or 150
+        
+        # Format activity breakdown
+        activity_breakdown_str = ", ".join([f"{k}: {v}" for k, v in sorted(activity_breakdown.items(), key=lambda x: x[1], reverse=True)[:5]]) or "N/A"
         
         user_prompt = f"""### USER CONTEXT
 **Profile:**
 - Name: {user_profile.get('displayName', 'Athlete')}
+- Age: {user_profile.get('age', 'Unknown')}
 
-**Analysis Period:** Last {period} ({7 if period == 'week' else 30} days)
+**Analysis Period:** Last {1 if period == 'day' else (7 if period == 'week' else 30)} days (from {(datetime.now() - timedelta(days=1 if period == 'day' else (7 if period == 'week' else 30))).strftime('%B %d')} to {datetime.now().strftime('%B %d, %Y')})
 **Focus Areas:** {focus_str}
 **Generated:** {datetime.now().strftime('%A, %B %d, %Y')}
 
-**Health Metrics Summary:**
+---
+### DAILY METRICS SUMMARY
+
+**Steps & Activity:**
 - Average Daily Steps: {avg_steps}
 - Total Steps: {total_steps}
+- Total Active Minutes: {active_mins}
+- Total Calories Burned: {total_cals_health}
+- Intensity Minutes (Week): Vigorous: {weekly_vigorous} | Moderate: {weekly_moderate} | Goal: {weekly_goal}
+
+**Heart & Recovery:**
 - Average Resting HR: {avg_rhr} bpm
 - Average Stress Level: {avg_stress}/100
-- Total Active Minutes: {active_mins}
-- Total Calories Burned: {total_cals}
+- Current Body Battery: {current_bb}/100
+- Body Battery Trend: {bb_trend}
 
-**Sleep Summary:**
+**HRV Analysis:**
+- Current HRV Status: {current_hrv_status}
+- Average HRV (Last Night): {current_hrv_avg} ms
+- Weekly Average HRV: {avg_hrv_value if isinstance(avg_hrv_value, str) else f"{avg_hrv_value:.0f}"} ms
+- HRV Trend: {hrv_trend}
+- Most Common Status: {most_common_hrv_status}
+
+---
+### SLEEP ANALYSIS ({len(sleep_data) if sleep_data else 0} nights)
+
 - Average Sleep Duration: {avg_sleep:.1f} hours
-- Average Deep Sleep: {avg_deep:.1f} hours
-- Data Points: {len(sleep_data) if sleep_data else 0} nights
+- Average Sleep Score: {avg_sleep_score:.0f}/100
+- Average Deep Sleep: {avg_deep:.1f} hours ({(avg_deep/avg_sleep*100) if avg_sleep > 0 else 0:.0f}%)
+- Average REM Sleep: {avg_rem:.1f} hours ({(avg_rem/avg_sleep*100) if avg_sleep > 0 else 0:.0f}%)
+- Average Light Sleep: {avg_light:.1f} hours ({(avg_light/avg_sleep*100) if avg_sleep > 0 else 0:.0f}%)
 
-**Activity Summary:**
-- Total Workouts: {total_activities}
-- Total Duration: {total_duration:.0f} minutes
+---
+### ACTIVITY ANALYSIS ({total_activities} workouts)
+
+- Total Workout Duration: {total_duration:.0f} minutes ({total_duration/60:.1f} hours)
+- Total Distance: {total_distance:.1f} km
+- Total Workout Calories: {total_calories:,}
+- Average Workout HR: {avg_workout_hr:.0f} bpm
+- Average Training Effect: {avg_training_effect:.1f}/5.0
+- Activity Breakdown: {activity_breakdown_str}
 - Most Common Type: {_get_most_common_activity(activities)}
 
+---
+### PERFORMANCE METRICS
+
+- VO2 Max: {vo2max}
+- Fitness Age: {fitness_age}
+- Endurance Score: {endurance_score}/100
+- Training Status: {training_status}
+- 7-Day Training Load: {training_load_7d}
+- Recommended Recovery Time: {recovery_time} hours
+
+---
+### TODAY'S READINESS
+
+- Readiness Score: {readiness_score}/100
+- Body Battery: {current_bb}/100
+- HRV Status: {current_hrv_status}
+- Sleep Score (Last Night): {sleep_scores[0] if sleep_scores else 'N/A'}/100
+- Recommendation: {today_readiness.get('adjustment_reason', 'No adjustments needed')}
+
+---
 ### INSTRUCTION
 Analyze the health data and generate comprehensive insights following the JSON schema.
 Focus on actionable recommendations that will help improve overall fitness and well-being.
@@ -447,6 +654,11 @@ You have access to the user's COMPLETE health and fitness data including ALL act
                 te_anaerobic = a.get('anaerobicTrainingEffect') or a.get('trainingEffectAnaerobic') or 'N/A'
                 start_time = a.get('startTimeLocal', 'Unknown date')
                 
+                # New metrics
+                avg_stress = a.get('avgStressLevel') or ''
+                avg_respiration = a.get('avgRespirationRate') or ''
+                performance_cond = a.get('performanceCondition') or a.get('firstBeatPerformanceCondition') or ''
+                
                 # Calculate pace if running/walking
                 pace_str = ""
                 if distance_km > 0 and duration_mins > 0 and activity_type in ['running', 'walking', 'trail_running', 'treadmill_running']:
@@ -455,7 +667,16 @@ You have access to the user's COMPLETE health and fitness data including ALL act
                     pace_secs = int((pace - pace_mins) * 60)
                     pace_str = f", Pace: {pace_mins}:{pace_secs:02d}/km"
                 
-                activities_summary += f"{i+1}. [{start_time}] {activity_name} ({activity_type}) - {duration_mins:.0f}min, {distance_km:.2f}km, HR: {avg_hr}/{max_hr}, TE: {te_aerobic}/{te_anaerobic}{pace_str}\n"
+                # Build extra metrics string
+                extra_metrics = ""
+                if avg_stress:
+                    extra_metrics += f", Stress: {avg_stress}"
+                if avg_respiration:
+                    extra_metrics += f", Resp: {avg_respiration:.1f}brpm" if isinstance(avg_respiration, (int, float)) else ""
+                if performance_cond:
+                    extra_metrics += f", PC: {'+' if performance_cond > 0 else ''}{performance_cond}"
+                
+                activities_summary += f"{i+1}. [{start_time}] {activity_name} ({activity_type}) - {duration_mins:.0f}min, {distance_km:.2f}km, HR: {avg_hr}/{max_hr}, TE: {te_aerobic}/{te_anaerobic}{pace_str}{extra_metrics}\n"
         else:
             activities_summary = "No activities recorded."
 
@@ -677,7 +898,11 @@ Provide a helpful, personalized response based on the user's complete data. Be s
                         f"  Benefits: {act['benefits']}"
                     )
             supplementary_text = "\n".join(supplementary_list)
-            supplementary_text += "\n\n**IMPORTANT:** Schedule these activities with optimal timing. Include them in the daily workout plan with specific time recommendations (Morning, Pre-workout, Evening 6h+ post-run, etc.)."
+            supplementary_text += "\n\n**CRITICAL - YOU MUST FOLLOW USER'S FREQUENCY:**"
+            supplementary_text += "\n- If user selected 7x/week (Every day), that activity MUST appear in EVERY day's supplementary array"
+            supplementary_text += "\n- For example, if Cold Plunge is 7x/week, add it to all 7 days"
+            supplementary_text += "\n- Each day's 'supplementary' array must contain ALL activities scheduled for that day"
+            supplementary_text += "\n- Include specific time recommendations (Morning, Pre-workout, Evening 6h+ post-run, etc.)"
         else:
             supplementary_text = "None selected - focus on running workouts only."
         
@@ -782,11 +1007,12 @@ When the user includes supplementary activities, schedule them with OPTIMAL TIMI
   "recovery_recommendations": "String with specific recovery advice",
   "daily_adjustment_note": "Reminder that each day's workout will be re-evaluated based on that morning's readiness",
   "supplementary_schedule": {
-    "wim_hof": ["Monday AM", "Wednesday AM", "Friday AM"],
-    "mobility": ["Daily AM"],
-    "yoga": ["Tuesday PM", "Thursday PM", "Sunday"],
-    "cold_plunge": ["Post-long run (6h+)", "Rest day morning"],
-    "gym": ["Monday PM (6h post-run)", "Thursday PM"]
+    "// IMPORTANT": "Schedule EXACTLY as user requested - if 7x/week, list all 7 days",
+    "wim_hof": ["Example: Mon AM, Tue AM, Wed AM, Thu AM, Fri AM, Sat AM, Sun AM if 7x/week"],
+    "mobility": ["Example: Daily AM if 7x/week"],
+    "yoga": ["Example: All 7 days if 7x/week, or specific days if less"],
+    "cold_plunge": ["Example: All 7 days if 7x/week"],
+    "gym": ["Example: Mon, Wed, Fri if 3x/week"]
   }
 }
 """
@@ -861,6 +1087,11 @@ Current Date: {datetime.now().strftime('%A, %B %d, %Y')}
 4. Ensure 80/20 polarized distribution across the week
 5. Include 1-2 complete rest or recovery days
 6. Address any load focus issues (e.g., Anaerobic Shortage)
+7. **SUPPLEMENTARY ACTIVITIES ARE MANDATORY:**
+   - Each workout's "supplementary" array MUST include ALL activities scheduled for that day
+   - If user requested 7x/week for an activity, it MUST appear in ALL 7 days
+   - Even REST days should include the appropriate supplementary activities
+   - Include proper timing (Morning, Evening, Pre-workout, Post-workout 6h+)
 
 Generate the JSON week plan now."""
 
@@ -959,6 +1190,9 @@ Generate the JSON week plan now."""
                         f"  Optimal: {act['optimal_time']}"
                     )
             supplementary_text = "\n".join(supplementary_list)
+            supplementary_text += "\n\n**CRITICAL - YOU MUST FOLLOW USER'S FREQUENCY:**"
+            supplementary_text += "\n- If user selected 7x/week (Every day), that activity MUST appear in EVERY day's supplementary array"
+            supplementary_text += "\n- Each day's 'supplementary' array must contain ALL activities scheduled for that day"
         
         system_prompt = """### SYSTEM ROLE
 You are the "Physiological Engine," generating a 4-WEEK MESOCYCLE training plan.
@@ -1064,7 +1298,11 @@ Start Date: {datetime.now().strftime('%B %d, %Y')}
 4. ALL running workouts need SPECIFIC PACES from VDOT (e.g., "Easy @ 5:30-5:45/km")
 5. Include 80/20 intensity distribution across the mesocycle
 6. Rest days should still appear in the workout array with type "rest"
-7. If supplementary activities selected, add them to the "supplementary" array with optimal timing
+7. **SUPPLEMENTARY ACTIVITIES ARE MANDATORY:**
+   - Each workout's "supplementary" array MUST include ALL activities scheduled for that day
+   - If user requested 7x/week, that activity MUST appear in ALL 7 days of EACH week
+   - Even REST days should include appropriate supplementary activities
+   - Include proper timing (Morning, Evening, Pre-workout, Post-workout 6h+)
 8. Include detailed steps with paces for interval/tempo workouts
 
 **DO NOT** output fewer than 7 workouts per week. Each day must have an entry.
@@ -1109,6 +1347,29 @@ Generate the JSON month plan now."""
         elevation = activity.get("elevationGain", 0) or 0
         avg_cadence = activity.get("averageRunningCadenceInStepsPerMinute") or 0
         start_time = activity.get("startTimeLocal", "Unknown")
+        
+        # New metrics: stress, respiration, performance condition, stride length, power
+        avg_stress = activity.get("avgStressLevel") or "N/A"
+        max_stress = activity.get("maxStressLevel") or "N/A"
+        avg_respiration = activity.get("avgRespirationRate") or "N/A"
+        max_respiration = activity.get("maxRespirationRate") or "N/A"
+        performance_condition = activity.get("performanceCondition") or activity.get("firstBeatPerformanceCondition") or "N/A"
+        avg_stride_length = activity.get("avgStrideLength")
+        if avg_stride_length:
+            avg_stride_length = f"{avg_stride_length / 100:.2f}m"  # Convert cm to m
+        else:
+            avg_stride_length = "N/A"
+        avg_power = activity.get("avgPower") or "N/A"
+        max_power = activity.get("maxPower") or "N/A"
+        norm_power = activity.get("normPower") or "N/A"
+        training_load = activity.get("trainingLoad") or "N/A"
+        recovery_time = activity.get("recoveryTimeInMinutes")
+        if recovery_time:
+            recovery_hours = recovery_time // 60
+            recovery_mins = recovery_time % 60
+            recovery_time_str = f"{recovery_hours}h {recovery_mins}m" if recovery_hours else f"{recovery_mins}m"
+        else:
+            recovery_time_str = "N/A"
         
         # Calculate pace if applicable
         pace_str = "N/A"
@@ -1238,7 +1499,88 @@ Generate the JSON month plan now."""
 - Zone 5 (VO2max): {zones.get('zone5', {}).get('min_bpm', 167)}-{zones.get('zone5', {}).get('max_bpm', 185)} bpm
 """
         
-        system_prompt = """### SYSTEM ROLE
+        # Determine if this is a recovery/wellness activity based on name and type
+        activity_name_lower = activity_name.lower()
+        activity_type_lower = activity_type.lower()
+        combined_lower = f"{activity_name_lower} {activity_type_lower}"
+        
+        # Recovery/wellness activities - check both name AND type
+        recovery_keywords = [
+            'cold plunge', 'ice bath', 'cold', 'plunge', 'sauna', 'meditation', 
+            'breathing', 'wim hof', 'breathwork', 'yoga', 'stretch', 'stretching',
+            'mobility', 'recovery', 'massage', 'foam roll', 'foam rolling',
+            'rest', 'relax', 'mindfulness', 'wellness', 'cooldown', 'warmup'
+        ]
+        is_recovery_activity = any(keyword in combined_lower for keyword in recovery_keywords)
+        
+        # Also check if it's "other" type with recovery-related name
+        if activity_type_lower == 'other' and any(kw in activity_name_lower for kw in ['cold', 'plunge', 'ice', 'sauna', 'breath', 'meditation', 'yoga', 'stretch']):
+            is_recovery_activity = True
+        
+        is_strength_activity = any(keyword in combined_lower for keyword in [
+            'strength', 'weight', 'gym', 'lift', 'resistance', 'crossfit', 'hiit'
+        ]) and not is_recovery_activity
+        
+        is_cardio_activity = any(keyword in combined_lower for keyword in [
+            'run', 'cycling', 'bike', 'swim', 'row', 'elliptical', 'walk', 'hike', 'cardio'
+        ]) and not is_recovery_activity
+        
+        # Build context-aware system prompt
+        if is_recovery_activity:
+            system_prompt = f"""### SYSTEM ROLE
+You are an expert Recovery Specialist and Wellness Coach analyzing a RECOVERY/WELLNESS activity.
+This is NOT a workout - it's a recovery or wellness activity: "{activity_name}".
+
+### CRITICAL: SCORING GUIDELINES FOR RECOVERY ACTIVITIES
+IMPORTANT: Recovery activities are scored DIFFERENTLY than workouts!
+
+**Scoring Rules for Recovery Activities:**
+- Cold Plunge/Ice Bath (1-5 min): Score 80-95 (excellent - cold exposure achieved)
+- Cold Plunge/Ice Bath (5-10 min): Score 90-100 (exceptional cold tolerance)
+- Yoga (15-30 min): Score 80-90 (good mindful practice)
+- Yoga (30-60+ min): Score 85-95 (excellent practice)
+- Breathing/Meditation (5-15 min): Score 80-90 (effective session)
+- Stretching/Mobility (10-20 min): Score 75-85 (good recovery work)
+- Sauna (10-20 min): Score 80-90 (good heat exposure)
+
+**DO NOT penalize recovery activities for:**
+- Short duration (1-5 min cold plunge is IDEAL, not a failure!)
+- Zero distance (recovery activities have no distance)
+- Low calorie burn (that's expected!)
+- Missing pace data (not applicable)
+- Low aerobic/anaerobic training effect (recovery isn't meant to train!)
+
+### ANALYSIS FRAMEWORK FOR RECOVERY ACTIVITIES
+1. **Recovery Value** - What recovery benefits did this activity provide?
+2. **Execution** - Was the activity performed correctly/safely? Duration appropriate?
+3. **Physiological Benefits** - Heart rate response, parasympathetic activation
+4. **Recommendations** - How to optimize this recovery practice
+
+### GUIDELINES
+- A completed recovery activity IS a success - rate it positively (75+ score minimum)
+- Cold plunge: Even 1-3 minutes provides significant benefits - score HIGH
+- Yoga: Focus on duration and consistency, not intensity metrics
+- Breathing: Focus on stress reduction benefits
+- Do NOT say the activity "wasn't recorded" or is an "error" - the user completed it!
+- Be encouraging and supportive about recovery practices"""
+        elif is_strength_activity:
+            system_prompt = """### SYSTEM ROLE
+You are an expert Strength Coach and Exercise Physiologist analyzing a strength/resistance training session.
+Provide a COMPREHENSIVE analysis focused on strength training metrics.
+
+### ANALYSIS FRAMEWORK FOR STRENGTH TRAINING
+1. **Session Assessment** - Overall quality of the strength session
+2. **Intensity & Volume** - Based on HR, duration, and effort
+3. **Recovery Impact** - Training effect and recovery needs
+4. **Recommendations** - Specific actions for improvement
+
+### GUIDELINES
+- Focus on effort, heart rate patterns, and training effect
+- Don't analyze pace/distance (not relevant for strength)
+- Consider workout duration and intensity
+- Provide strength-focused recommendations"""
+        else:
+            system_prompt = """### SYSTEM ROLE
 You are an expert Running Coach and Exercise Physiologist specializing in workout analysis.
 Provide a COMPREHENSIVE analysis of the workout with specific, actionable insights.
 
@@ -1256,34 +1598,36 @@ Provide a COMPREHENSIVE analysis of the workout with specific, actionable insigh
 - Provide 2-3 concrete, actionable recommendations
 - Be encouraging but honest about areas for improvement
 - Reference specific splits/segments if available
-- Consider environmental factors (weather, elevation)
+- Consider environmental factors (weather, elevation)"""
 
+        # Common output schema for all activity types
+        output_schema = """
 ### OUTPUT SCHEMA (JSON)
 {
-  "overall_rating": "Excellent | Good | Average | Below Expectations" (number 1-10),
+  "overall_rating": "Excellent | Good | Average | Below Expectations",
   "overall_score": Number (1-100),
-  "one_liner": "Quick summary of the workout in one sentence",
-  "performance_summary": "2-3 sentence overview of how the workout went",
+  "one_liner": "Quick summary of the activity in one sentence - tailor to activity type",
+  "performance_summary": "2-3 sentence overview - for recovery activities focus on wellness benefits, for workouts focus on performance",
   "comparison_to_history": {
     "trend": "improving | stable | declining | no_data",
-    "pace_vs_avg": "faster | similar | slower | N/A",
+    "pace_vs_avg": "faster | similar | slower | N/A (use N/A for non-cardio activities)",
     "pace_diff_percent": Number or null,
     "hr_vs_avg": "higher | similar | lower | N/A",
     "hr_diff_bpm": Number or null,
-    "efficiency_trend": "String describing efficiency changes",
-    "notable_change": "String highlighting the most significant change"
+    "efficiency_trend": "String describing efficiency/recovery quality changes",
+    "notable_change": "String highlighting the most significant observation"
   },
   "what_went_well": [
     {
-      "category": "pace | heart_rate | consistency | endurance | effort | cadence | form",
-      "observation": "Specific positive observation",
-      "metric": "The actual number/value",
-      "significance": "Why this matters"
+      "category": "recovery | relaxation | heart_rate | consistency | endurance | effort | technique | duration",
+      "observation": "Specific positive observation tailored to activity type",
+      "metric": "The actual number/value (e.g., '3 min duration', '75 bpm avg HR')",
+      "significance": "Why this matters for recovery/performance"
     }
   ],
   "what_needs_improvement": [
     {
-      "category": "pace | heart_rate | consistency | endurance | pacing_strategy | cadence | form",
+      "category": "technique | duration | timing | frequency | heart_rate | consistency",
       "observation": "Specific area for improvement",
       "metric": "The actual number/value",
       "recommendation": "How to improve this"
@@ -1305,6 +1649,30 @@ Provide a COMPREHENSIVE analysis of the workout with specific, actionable insigh
     "anaerobic_rating": "Excellent | Good | Moderate | Low | N/A",
     "anaerobic_insight": "What the anaerobic TE means"
   },
+  "stress_analysis": {
+    "avg_stress": Number or null,
+    "max_stress": Number or null,
+    "stress_during_activity": "low | moderate | high | N/A",
+    "stress_management": "How well stress was managed during the activity",
+    "insight": "What the stress levels indicate about the workout"
+  },
+  "respiration_analysis": {
+    "avg_respiration": Number or null,
+    "max_respiration": Number or null,
+    "breathing_efficiency": "efficient | moderate | needs_work | N/A",
+    "insight": "What respiration patterns indicate about effort and recovery"
+  },
+  "performance_condition_analysis": {
+    "value": Number or null,
+    "interpretation": "above_baseline | at_baseline | below_baseline | N/A",
+    "insight": "What performance condition indicates about freshness/fatigue"
+  },
+  "power_analysis": {
+    "avg_power": Number or null,
+    "normalized_power": Number or null,
+    "power_efficiency": "Assessment of power output relative to HR/pace",
+    "insight": "Power-related insights if available"
+  },
   "key_takeaways": [
     "Takeaway 1 - most important insight",
     "Takeaway 2 - second most important",
@@ -1320,24 +1688,67 @@ Provide a COMPREHENSIVE analysis of the workout with specific, actionable insigh
   "recovery_suggestion": "Specific recovery recommendation based on this workout's intensity"
 }
 """
+        
+        # Add output schema to system prompt
+        system_prompt = system_prompt + output_schema
 
-        user_prompt = f"""### WORKOUT DATA TO ANALYZE
-**Activity:** {activity_name}
-**Type:** {activity_type}
+        # Build activity type context
+        activity_context = ""
+        if is_recovery_activity:
+            activity_context = f"""
+### CRITICAL: THIS IS A RECOVERY/WELLNESS ACTIVITY - "{activity_name}"
+This is a RECOVERY activity - evaluate it as such, NOT as a workout!
+
+**For this activity, you MUST:**
+- Give a score of 75-95 (this is a successfully completed recovery activity)
+- Praise the user for prioritizing recovery
+- Focus on wellness benefits, NOT workout metrics
+- Do NOT say this is an "error", "accidental recording", or "failed to record"
+
+**Evaluation criteria for "{activity_name}":**
+- Cold plunge: Duration of 1-5 min = excellent, HR data shows cold response
+- Yoga: Duration of 15+ min = good session, relaxation achieved
+- The user INTENTIONALLY did this activity for recovery - acknowledge that!
+"""
+        elif is_strength_activity:
+            activity_context = f"""
+### ACTIVITY TYPE: STRENGTH/RESISTANCE TRAINING
+Analyze "{activity_name}" as a strength training session.
+Focus on effort, training effect, and recovery needs rather than pace/distance.
+"""
+
+        user_prompt = f"""### ACTIVITY DATA TO ANALYZE
+**Activity Name:** {activity_name}
+**Activity Type:** {activity_type}
 **Date:** {start_time}
 **Athlete:** {user_profile.get('displayName', 'Athlete')}
-
+{activity_context}
 **Core Metrics:**
-- Duration: {duration_mins:.0f} minutes
-- Distance: {distance_km:.2f} km
-- Average Pace: {pace_str}
+- Duration: {duration_mins:.1f} minutes
+- Distance: {distance_km:.2f} km {"(N/A for non-cardio activities)" if distance_km == 0 else ""}
+- Average Pace: {pace_str} {"(N/A for non-cardio activities)" if pace_str == "N/A" else ""}
 - Average HR: {avg_hr} bpm
 - Max HR: {max_hr} bpm
 - Calories: {calories}
 - Elevation Gain: {elevation}m
-- Cadence: {avg_cadence} spm (if running)
+- Cadence: {avg_cadence} spm {"(N/A for non-running activities)" if avg_cadence == 0 else ""}
 
-**Training Effect:**
+**Physiological Metrics:**
+- Average Stress Level: {avg_stress}
+- Max Stress Level: {max_stress}
+- Average Respiration Rate: {avg_respiration} brpm
+- Max Respiration Rate: {max_respiration} brpm
+- Performance Condition: {performance_condition}
+- Average Stride Length: {avg_stride_length}
+
+**Power Metrics (if available):**
+- Average Power: {avg_power} W
+- Max Power: {max_power} W
+- Normalized Power: {norm_power} W
+
+**Training Load & Recovery:**
+- Training Load: {training_load}
+- Recommended Recovery: {recovery_time_str}
 - Aerobic TE: {te_aerobic:.1f}/5.0
 - Anaerobic TE: {te_anaerobic:.1f}/5.0
 {user_hr_zones_text}
@@ -1347,9 +1758,16 @@ Provide a COMPREHENSIVE analysis of the workout with specific, actionable insigh
 {comparison_text}
 
 ### INSTRUCTION
-Analyze this workout comprehensively. Compare it to the historical data provided.
+{'''CRITICAL: This is a RECOVERY activity. You MUST:
+1. Give an overall_score of 75-95 (this activity was completed successfully)
+2. Set overall_rating to "Good" or "Excellent" (recovery was achieved)
+3. Focus on recovery BENEFITS in your analysis
+4. Do NOT mention "accidental recording", "sync error", "no data", or similar
+5. Praise the user for completing this recovery practice
+6. The duration shown IS the actual duration - it's not an error!''' if is_recovery_activity else "Analyze this activity comprehensively. Compare it to the historical data provided."}
+
 Identify what went well, what needs improvement, and provide specific recommendations.
-Be encouraging but honest. Use the exact numbers from the data.
+Be encouraging and supportive. Use the exact numbers from the data when available.
 
 Generate the JSON analysis now."""
 

@@ -1,191 +1,111 @@
 # OrkTrack - AI-Powered Garmin Fitness Dashboard
 
-A comprehensive fitness dashboard that connects to your Garmin Connect account and uses AI (Google Gemini) to provide personalized insights, workout plans, and intelligent data analysis.
+A comprehensive fitness dashboard that connects to your Garmin account and provides AI-powered insights, training plans, and activity analysis.
 
 ## Features
 
-### 📊 Activity Dashboard
-- Real-time sync with Garmin Connect
-- Interactive charts for steps, calories, distance, and more
-- Heart rate trends and zone analysis
-- Sleep quality tracking with sleep stages
-- Stress level monitoring
-
-### 💬 AI Chat Assistant
-- Natural language queries about your fitness data
-- Context-aware responses using your complete health history
-- Ask questions like "How did I sleep last week?" or "Compare my running this month vs last month"
-
-### 📅 AI Workout Planner
-- Generate personalized weekly/monthly training plans
-- Plans based on your historical performance and recovery status
-- Progressive overload suggestions
-- Rest day recommendations based on your actual recovery metrics
-
-### 💡 Health Insights
-- AI-generated weekly health reports
-- Sleep pattern analysis with improvement suggestions
-- Training load vs recovery balance
-- Personalized health tips
+- **Dashboard**: Real-time health metrics including sleep score, body battery, HRV, resting HR
+- **Activity Analysis**: AI-powered analysis of all activities (running, yoga, cold plunge, strength, etc.)
+- **Training Planner**: Generate personalized weekly or monthly training plans based on your goals
+- **Health Insights**: AI-generated insights based on your sleep, activity, and recovery data
+- **AI Chat**: Ask questions about your training and get personalized advice
+- **Data Sync**: Automatic background sync with manual refresh option
 
 ## Tech Stack
 
-- **Frontend**: Streamlit
-- **Data Visualization**: Plotly
-- **Garmin API**: python-garminconnect
-- **AI Model**: Google Gemini 2.0 Flash
-- **Database**: SQLite + SQLAlchemy
-- **Authentication**: Garth (OAuth tokens)
+### Backend
+- **FastAPI** - Python web framework
+- **SQLAlchemy** - Database ORM
+- **Google Gemini AI** - AI analysis and plan generation
+- **Garmin Connect API** - Fitness data integration
 
-## Installation
+### Frontend
+- **React** + **TypeScript**
+- **Vite** - Build tool
+- **TailwindCSS** - Styling
+- **Framer Motion** - Animations
+- **TanStack Query** - Data fetching
+
+## Setup
 
 ### Prerequisites
+- Python 3.10+
+- Node.js 18+
+- Garmin Connect account
+- Google AI API key (Gemini)
 
-- Python 3.10 or higher
-- A Garmin Connect account with synced device data
-- A Google Gemini API key (get one at [Google AI Studio](https://aistudio.google.com/apikey))
+### Backend Setup
 
-### Setup
+1. Create a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
 
-1. **Clone or navigate to the project directory**:
-   ```bash
-   cd garmin_orktrack
-   ```
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-2. **Create a virtual environment**:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
+3. Create a `.env` file:
+```env
+GEMINI_API_KEY=your_gemini_api_key
+```
 
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+4. Run the backend:
+```bash
+uvicorn backend.main:app --reload --port 8000
+```
 
-4. **Create a `.env` file** with your credentials:
-   ```env
-   GARMIN_EMAIL=your_garmin_email@example.com
-   GARMIN_PASSWORD=your_garmin_password
-   GEMINI_API_KEY=your_gemini_api_key
-   ```
+### Frontend Setup
 
-5. **Run the application**:
-   ```bash
-   streamlit run app.py
-   ```
+1. Navigate to frontend directory:
+```bash
+cd frontend
+```
 
-6. **Open your browser** to `http://localhost:8501`
+2. Install dependencies:
+```bash
+npm install
+```
 
-## Configuration
+3. Run the development server:
+```bash
+npm run dev
+```
 
-### Environment Variables
+4. Open http://localhost:5173 in your browser
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GARMIN_EMAIL` | Yes | Your Garmin Connect email |
-| `GARMIN_PASSWORD` | Yes | Your Garmin Connect password |
-| `GEMINI_API_KEY` | Yes | Google Gemini API key |
-| `GARMIN_TOKEN_PATH` | No | Custom path for OAuth tokens (default: `~/.garminconnect`) |
-| `APP_DEBUG` | No | Enable debug mode (default: false) |
+## Usage
 
-### Customization
-
-Edit `config.py` to customize:
-- Activity type mappings and colors
-- Heart rate zone thresholds
-- Sleep stage colors
-- Chart color palette
-- Default data fetch ranges
+1. Log in with your Garmin Connect credentials
+2. View your dashboard with real-time health metrics
+3. Click on activities to see AI-powered analysis
+4. Use the Planner to generate training plans
+5. Check Insights for weekly/monthly health summaries
+6. Use AI Chat for personalized training advice
 
 ## Project Structure
 
 ```
 garmin_orktrack/
-├── app.py                  # Main Streamlit entry point
-├── config.py               # Application configuration
-├── requirements.txt        # Python dependencies
-├── services/
-│   ├── garmin_service.py   # Garmin Connect API wrapper
-│   ├── ai_service.py       # Gemini AI integration
-│   └── data_processor.py   # Data transformation utilities
-├── components/
-│   ├── auth.py             # Authentication UI
-│   ├── dashboard.py        # Main dashboard view
-│   ├── chat.py             # AI chat interface
-│   ├── planner.py          # Workout planner view
-│   └── insights.py         # Health insights view
+├── backend/
+│   ├── main.py          # FastAPI app entry
+│   ├── prompts.py       # AI prompt engineering
+│   └── routers/         # API endpoints
 ├── database/
-│   ├── models.py           # SQLAlchemy models
-│   └── db.py               # Database operations
-├── utils/
-│   ├── charts.py           # Plotly chart helpers
-│   └── prompts.py          # AI prompt templates
-└── assets/
-    └── style.css           # Custom styling
+│   ├── models.py        # SQLAlchemy models
+│   └── db.py            # Database operations
+├── services/
+│   └── garmin_service.py # Garmin API integration
+├── frontend/
+│   └── src/
+│       ├── components/  # React components
+│       ├── pages/       # Page components
+│       └── lib/         # Utilities & API client
+└── requirements.txt
 ```
-
-## Usage Guide
-
-### First-Time Setup
-
-1. Launch the app and enter your Garmin credentials
-2. Allow the app to sync your data (this may take a moment for the first sync)
-3. Your OAuth tokens will be saved locally for future sessions
-
-### Dashboard Navigation
-
-- **Dashboard**: Overview of all your health metrics
-- **AI Assistant**: Chat with AI about your fitness data
-- **Workout Planner**: Generate and manage workout plans
-- **Health Insights**: Get AI-powered analysis reports
-
-### Example AI Queries
-
-- "How did my sleep compare this week to last week?"
-- "What's my average running pace for the past month?"
-- "Am I ready for an intense workout today?"
-- "Help me set a realistic step goal"
-- "Analyze my heart rate trends"
-
-## Data Privacy
-
-- Your Garmin credentials are used only to authenticate with Garmin Connect
-- OAuth tokens are stored locally on your machine
-- No data is sent to third parties (except Gemini for AI features)
-- All processing happens locally on your machine
-
-## Troubleshooting
-
-### Login Issues
-
-- **Invalid credentials**: Ensure you're using Garmin Connect credentials (not Garmin Express)
-- **Two-Factor Authentication**: You may need to use an app-specific password
-- **Rate limiting**: Wait a few minutes if you see rate limit errors
-
-### Data Not Loading
-
-- Make sure your Garmin device has synced recently
-- Check that you have data for the selected time range
-- Try clearing the cache by logging out and back in
-
-### AI Features Not Working
-
-- Verify your Gemini API key is correct
-- Check that you haven't exceeded API rate limits
-- Ensure you have an active internet connection
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
 
 ## License
 
-MIT License - see LICENSE file for details.
-
-## Acknowledgments
-
-- [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) - Garmin Connect API wrapper
-- [Streamlit](https://streamlit.io/) - Web framework
-- [Plotly](https://plotly.com/) - Data visualization
-- [Google Gemini](https://ai.google.dev/) - AI capabilities
+MIT

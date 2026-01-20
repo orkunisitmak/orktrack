@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { 
   Clock, 
   Flame, 
@@ -25,6 +25,13 @@ import {
   Target,
   BarChart3,
   Loader2,
+  Wind,
+  Brain,
+  Footprints,
+  BatteryCharging,
+  ThermometerSun,
+  CloudRain,
+  RefreshCw,
 } from 'lucide-react'
 import { formatDuration, formatDistance, getActivityIcon, cn } from '@/lib/utils'
 import { aiAPI } from '@/lib/api'
@@ -53,6 +60,19 @@ interface Activity {
   vO2MaxValue?: number
   lactateThresholdHeartRate?: number
   lactateThresholdSpeed?: number
+  // New metrics
+  avgStressLevel?: number
+  maxStressLevel?: number
+  avgRespirationRate?: number
+  maxRespirationRate?: number
+  performanceCondition?: number
+  firstBeatPerformanceCondition?: number
+  avgStrideLength?: number
+  avgPower?: number
+  maxPower?: number
+  normPower?: number
+  trainingLoad?: number
+  recoveryTimeInMinutes?: number
 }
 
 interface ActivityListProps {
@@ -244,7 +264,7 @@ export default function ActivityList({ activities, showAnalysis = false }: Activ
                       )}
 
                       {/* Elevation Gain */}
-                      {activity.elevationGain && activity.elevationGain > 0 && (
+                      {(activity.elevationGain ?? 0) > 0 && (
                         <DetailItem
                           icon={Mountain}
                           label="Elevation"
@@ -254,7 +274,7 @@ export default function ActivityList({ activities, showAnalysis = false }: Activ
                       )}
 
                       {/* Steps */}
-                      {activity.steps && activity.steps > 100 && (
+                      {(activity.steps ?? 0) > 100 && (
                         <DetailItem
                           icon={Activity}
                           label="Steps"
@@ -284,8 +304,7 @@ export default function ActivityList({ activities, showAnalysis = false }: Activ
                       )}
 
                       {/* Cadence */}
-                      {activity.averageRunningCadenceInStepsPerMinute && 
-                       activity.averageRunningCadenceInStepsPerMinute > 10 && (
+                      {(activity.averageRunningCadenceInStepsPerMinute ?? 0) > 10 && (
                         <DetailItem
                           icon={Activity}
                           label="Cadence"
@@ -302,6 +321,112 @@ export default function ActivityList({ activities, showAnalysis = false }: Activ
                           value={`${activity.vO2MaxValue}`}
                           color="green"
                           highlight
+                        />
+                      )}
+
+                      {/* Stress Level */}
+                      {(activity.avgStressLevel ?? 0) > 0 && (
+                        <DetailItem
+                          icon={Brain}
+                          label="Avg Stress"
+                          value={`${activity.avgStressLevel}`}
+                          color={activity.avgStressLevel < 40 ? "green" : activity.avgStressLevel < 60 ? "yellow" : "orange"}
+                        />
+                      )}
+
+                      {/* Max Stress */}
+                      {(activity.maxStressLevel ?? 0) > 0 && activity.maxStressLevel !== activity.avgStressLevel && (
+                        <DetailItem
+                          icon={Brain}
+                          label="Max Stress"
+                          value={`${activity.maxStressLevel}`}
+                          color="orange"
+                        />
+                      )}
+
+                      {/* Respiration Rate */}
+                      {(activity.avgRespirationRate ?? 0) > 0 && (
+                        <DetailItem
+                          icon={Wind}
+                          label="Avg Respiration"
+                          value={`${activity.avgRespirationRate.toFixed(1)} brpm`}
+                          color="cyan"
+                        />
+                      )}
+
+                      {/* Max Respiration */}
+                      {(activity.maxRespirationRate ?? 0) > 0 && activity.maxRespirationRate !== activity.avgRespirationRate && (
+                        <DetailItem
+                          icon={Wind}
+                          label="Max Respiration"
+                          value={`${activity.maxRespirationRate.toFixed(1)} brpm`}
+                          color="cyan"
+                          highlight
+                        />
+                      )}
+
+                      {/* Performance Condition */}
+                      {(activity.performanceCondition !== undefined && activity.performanceCondition !== null) || 
+                       (activity.firstBeatPerformanceCondition !== undefined && activity.firstBeatPerformanceCondition !== null) ? (
+                        <DetailItem
+                          icon={Gauge}
+                          label="Performance"
+                          value={`${(activity.performanceCondition ?? activity.firstBeatPerformanceCondition ?? 0) > 0 ? '+' : ''}${activity.performanceCondition ?? activity.firstBeatPerformanceCondition}`}
+                          color={(activity.performanceCondition ?? activity.firstBeatPerformanceCondition ?? 0) >= 0 ? "green" : "red"}
+                          highlight
+                        />
+                      ) : null}
+
+                      {/* Stride Length */}
+                      {(activity.avgStrideLength ?? 0) > 0 && (
+                        <DetailItem
+                          icon={Footprints}
+                          label="Stride Length"
+                          value={`${(activity.avgStrideLength / 100).toFixed(2)} m`}
+                          color="blue"
+                        />
+                      )}
+
+                      {/* Power */}
+                      {(activity.avgPower ?? 0) > 0 && (
+                        <DetailItem
+                          icon={Zap}
+                          label="Avg Power"
+                          value={`${activity.avgPower} W`}
+                          color="yellow"
+                        />
+                      )}
+
+                      {/* Normalized Power */}
+                      {(activity.normPower ?? 0) > 0 && (
+                        <DetailItem
+                          icon={Zap}
+                          label="Norm Power"
+                          value={`${activity.normPower} W`}
+                          color="yellow"
+                          highlight
+                        />
+                      )}
+
+                      {/* Training Load */}
+                      {(activity.trainingLoad ?? 0) > 0 && (
+                        <DetailItem
+                          icon={BatteryCharging}
+                          label="Training Load"
+                          value={`${activity.trainingLoad}`}
+                          color="purple"
+                        />
+                      )}
+
+                      {/* Recovery Time */}
+                      {(activity.recoveryTimeInMinutes ?? 0) > 0 && (
+                        <DetailItem
+                          icon={Timer}
+                          label="Recovery"
+                          value={activity.recoveryTimeInMinutes >= 60 
+                            ? `${Math.floor(activity.recoveryTimeInMinutes / 60)}h ${activity.recoveryTimeInMinutes % 60}m`
+                            : `${activity.recoveryTimeInMinutes}m`}
+                          color="green"
                         />
                       )}
                     </div>
@@ -375,14 +500,32 @@ export default function ActivityList({ activities, showAnalysis = false }: Activ
 }
 
 function ActivityAnalysis({ activityId }: { activityId: string }) {
-  const { data, isLoading, error } = useQuery({
+  const [isRegenerating, setIsRegenerating] = useState(false)
+  const queryClient = useQueryClient()
+  
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['activity-analysis', activityId],
-    queryFn: () => aiAPI.analyzeActivity(activityId),
-    staleTime: 300000, // Cache for 5 minutes
+    queryFn: () => aiAPI.analyzeActivity(activityId, false),
+    staleTime: Infinity, // Always use cache since we save to DB
     retry: 1,
+    refetchOnWindowFocus: false,
   })
 
-  if (isLoading) {
+  const handleRegenerate = async () => {
+    setIsRegenerating(true)
+    try {
+      // Call the API with regenerate=true directly
+      const newAnalysis = await aiAPI.analyzeActivity(activityId, true)
+      // Update the cache with the new data
+      queryClient.setQueryData(['activity-analysis', activityId], newAnalysis)
+    } catch (error) {
+      console.error('Failed to regenerate analysis:', error)
+    } finally {
+      setIsRegenerating(false)
+    }
+  }
+
+  if (isLoading || isRegenerating) {
     return (
       <motion.div
         initial={{ opacity: 0, height: 0 }}
@@ -392,7 +535,9 @@ function ActivityAnalysis({ activityId }: { activityId: string }) {
       >
         <div className="flex items-center justify-center gap-3">
           <Loader2 className="w-5 h-5 animate-spin text-primary" />
-          <span className="text-muted-foreground">Analyzing workout with AI...</span>
+          <span className="text-muted-foreground">
+            {isRegenerating ? "Regenerating analysis with AI..." : "Analyzing activity with AI..."}
+          </span>
         </div>
       </motion.div>
     )
@@ -631,10 +776,29 @@ function ActivityAnalysis({ activityId }: { activityId: string }) {
         </div>
       )}
 
-      {/* Generated info */}
-      <p className="text-xs text-muted-foreground text-right">
-        Analyzed by {analysis.ai_model || 'AI'} • {data.comparison_activities_count || 0} similar workouts compared
-      </p>
+      {/* Generated info & Regenerate Button */}
+      <div className="flex items-center justify-between mt-4 pt-3 border-t border-border/30">
+        <p className="text-xs text-muted-foreground">
+          {data.cached && (
+            <span className="inline-flex items-center gap-1 mr-2 px-2 py-0.5 rounded bg-muted text-muted-foreground">
+              Cached
+            </span>
+          )}
+          Analyzed by {analysis.ai_model || 'AI'} • {data.comparison_activities_count || 0} similar activities compared
+        </p>
+        <button
+          onClick={handleRegenerate}
+          disabled={isRegenerating || isFetching}
+          className={cn(
+            "text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all",
+            "border border-primary/30 hover:bg-primary/10 text-primary",
+            (isRegenerating || isFetching) && "opacity-50 cursor-not-allowed"
+          )}
+        >
+          <RefreshCw className={cn("w-3 h-3", (isRegenerating || isFetching) && "animate-spin")} />
+          {isRegenerating ? "Regenerating..." : "Regenerate"}
+        </button>
+      </div>
     </motion.div>
   )
 }

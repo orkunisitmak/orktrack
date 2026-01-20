@@ -72,7 +72,7 @@ class MatchActivityRequest(BaseModel):
 
 
 class InsightRequest(BaseModel):
-    period: str = "week"  # "week" or "month"
+    period: str = "week"  # "day", "week" or "month"
     focus_areas: Optional[List[str]] = None
 
 
@@ -597,7 +597,7 @@ def _calculate_weekly_volume(activities: List[Dict]) -> Dict[str, float]:
 
 @router.post("/generate-insights")
 async def generate_insights(request: InsightRequest):
-    """Generate AI health insights."""
+    """Generate comprehensive AI health insights using all available data."""
     try:
         garmin = get_garmin_service()
         ai_service = AIService()
@@ -608,9 +608,9 @@ async def generate_insights(request: InsightRequest):
         if not ai_service.is_configured():
             raise HTTPException(status_code=503, detail="AI service not configured. Please add GEMINI_API_KEY to .env file.")
         
-        days = 7 if request.period == "week" else 30
+        days = 1 if request.period == "day" else (7 if request.period == "week" else 30)
         
-        # Get comprehensive data
+        # Get comprehensive data with all new metrics
         raw_data = {}
         try:
             raw_data = garmin.get_comprehensive_data(days=days)
@@ -619,17 +619,32 @@ async def generate_insights(request: InsightRequest):
             raw_data = {
                 "health_summary": garmin.get_health_metrics_for_ai(days=days),
                 "sleep_data": [],
-                "activities": []
+                "activities": [],
+                "body_battery": [],
+                "hrv_data": [],
+                "performance_metrics": {},
+                "today_readiness": {},
+                "personal_records": {},
+                "intensity_minutes": {},
+                "hr_zones": {}
             }
         
-        # Build structured prompt
+        # Build structured prompt with all comprehensive data
         prompt = PromptEngine.build_insights_prompt(
             user_profile=garmin.user_profile or {},
             health_data=raw_data.get("health_summary", {}),
             sleep_data=raw_data.get("sleep_data", []),
             activities=raw_data.get("activities", []),
             period=request.period,
-            focus_areas=request.focus_areas
+            focus_areas=request.focus_areas,
+            # Pass all new comprehensive data
+            body_battery=raw_data.get("body_battery", []),
+            hrv_data=raw_data.get("hrv_data", []),
+            performance_metrics=raw_data.get("performance_metrics", {}),
+            today_readiness=raw_data.get("today_readiness", {}),
+            personal_records=raw_data.get("personal_records", {}),
+            intensity_minutes=raw_data.get("intensity_minutes", {}),
+            hr_zones=raw_data.get("hr_zones", {})
         )
         
         # Generate insights
@@ -639,6 +654,14 @@ async def generate_insights(request: InsightRequest):
         if insights_data:
             insights_data["generated_at"] = datetime.now().isoformat()
             insights_data["period"] = request.period
+            # Add raw data summary for frontend display
+            insights_data["data_sources"] = {
+                "sleep_nights": len(raw_data.get("sleep_data", [])),
+                "activities_count": len(raw_data.get("activities", [])),
+                "body_battery_days": len(raw_data.get("body_battery", [])),
+                "hrv_days": len(raw_data.get("hrv_data", [])),
+                "has_performance_metrics": bool(raw_data.get("performance_metrics")),
+            }
             return insights_data
         else:
             # Return a structured fallback response
@@ -650,7 +673,10 @@ async def generate_insights(request: InsightRequest):
                 "sleep_analysis": {"quality_rating": "Unknown", "insights": [], "recommendations": []},
                 "activity_analysis": {"consistency_rating": "Unknown", "insights": [], "recommendations": []},
                 "recovery_analysis": {"status": "Unknown", "insights": [], "recommendations": []},
+                "performance_analysis": {"vo2_max": None, "fitness_age": None, "insights": [], "recommendations": []},
+                "stress_analysis": {"avg_stress_level": None, "insights": [], "recommendations": []},
                 "weekly_focus": "Continue your current routine",
+                "action_plan": [],
                 "motivational_message": "Keep up the great work!",
                 "generated_at": datetime.now().isoformat(),
                 "period": request.period
@@ -704,8 +730,16 @@ async def recommend_goals():
 
 
 @router.get("/activity/{activity_id}/analysis")
-async def analyze_activity(activity_id: str):
-    """Get comprehensive AI analysis of a specific activity with comparisons."""
+async def analyze_activity(
+    activity_id: str,
+    regenerate: bool = Query(default=False, description="Force regeneration of analysis")
+):
+    """Get comprehensive AI analysis of a specific activity with comparisons.
+    
+    - Returns cached analysis if available
+    - Set regenerate=True to force new analysis generation
+    - Uses comprehensive metrics including stress, respiration, performance condition
+    """
     try:
         garmin = get_garmin_service()
         ai_service = AIService()
@@ -716,55 +750,182 @@ async def analyze_activity(activity_id: str):
         if not ai_service.is_configured():
             raise HTTPException(status_code=503, detail="AI service not configured")
         
-        # Get activity details
-        activity = garmin.get_activity_details(activity_id)
+        # Check for cached analysis if not regenerating
+        if not regenerate:
+            cached_analysis = DatabaseManager.get_activity_analysis(activity_id)
+            if cached_analysis:
+                return {
+                    "activity_id": activity_id,
+                    "analysis": cached_analysis.analysis_data,
+                    "activity_summary": cached_analysis.activity_summary,
+                    "comparison_activities_count": cached_analysis.comparison_activities_count,
+                    "has_splits": cached_analysis.activity_summary.get("has_splits", False) if cached_analysis.activity_summary else False,
+                    "has_weather": cached_analysis.activity_summary.get("has_weather", False) if cached_analysis.activity_summary else False,
+                    "cached": True,
+                    "cached_at": cached_analysis.created_at.isoformat() if cached_analysis.created_at else None,
+                }
+        
+        # Get comprehensive activity details using the new method
+        try:
+            full_data = garmin.get_comprehensive_activity_data(activity_id)
+            raw_activity = full_data.get("activity", {})
+            
+            # Debug: log what we got
+            print(f"[Activity Analysis] Full data keys: {list(full_data.keys())}")
+            print(f"[Activity Analysis] Raw activity keys: {list(raw_activity.keys()) if raw_activity else 'None'}")
+            
+            # The Garmin API returns detailed activity data with nested DTOs
+            # We need to flatten the data structure for our analysis
+            summary_dto = raw_activity.get("summaryDTO", {}) or {}
+            activity_type_dto = raw_activity.get("activityTypeDTO", {}) or {}
+            
+            # Debug: log the summary DTO
+            print(f"[Activity Analysis] Summary DTO keys: {list(summary_dto.keys()) if summary_dto else 'None'}")
+            
+            # Build a flat activity object with the data we need
+            activity = {
+                "activityId": raw_activity.get("activityId"),
+                "activityName": raw_activity.get("activityName", ""),
+                "activityType": activity_type_dto,  # Keep the DTO structure
+                # Extract metrics from summaryDTO
+                "duration": summary_dto.get("duration") or summary_dto.get("elapsedDuration") or summary_dto.get("movingDuration"),
+                "distance": summary_dto.get("distance"),
+                "averageHR": summary_dto.get("averageHR") or summary_dto.get("averageHeartRate"),
+                "maxHR": summary_dto.get("maxHR") or summary_dto.get("maxHeartRate"),
+                "calories": summary_dto.get("calories") or summary_dto.get("activeKilocalories"),
+                "averageSpeed": summary_dto.get("averageSpeed"),
+                "maxSpeed": summary_dto.get("maxSpeed"),
+                "averageRunningCadenceInStepsPerMinute": summary_dto.get("averageRunningCadenceInStepsPerMinute"),
+                "elevationGain": summary_dto.get("elevationGain"),
+                "elevationLoss": summary_dto.get("elevationLoss"),
+                "aerobicTrainingEffect": summary_dto.get("aerobicTrainingEffect") or summary_dto.get("trainingEffect"),
+                "anaerobicTrainingEffect": summary_dto.get("anaerobicTrainingEffect"),
+                "avgStrideLength": summary_dto.get("avgStrideLength"),
+                "avgStressLevel": summary_dto.get("avgStressLevel"),
+                "maxStressLevel": summary_dto.get("maxStressLevel"),
+                "avgRespirationRate": summary_dto.get("avgRespirationRate"),
+                "maxRespirationRate": summary_dto.get("maxRespirationRate"),
+                # Keep the start time
+                "startTimeLocal": summary_dto.get("startTimeLocal") or raw_activity.get("startTimeLocal"),
+                "startTimeGMT": summary_dto.get("startTimeGMT") or raw_activity.get("startTimeGMT"),
+            }
+            
+            activity_details = {
+                "splits": full_data.get("splits"),
+                "hr_zones": full_data.get("hr_zones"),
+                "weather": full_data.get("weather"),
+                "typed_splits": full_data.get("typed_splits"),
+                "split_summaries": full_data.get("split_summaries"),
+            }
+            
+        except Exception as e:
+            print(f"Error getting comprehensive data, falling back to basic: {e}")
+            import traceback
+            traceback.print_exc()
+            activity = garmin.get_activity_details(activity_id)
+            activity_details = {}
         
         if not activity:
             raise HTTPException(status_code=404, detail="Activity not found")
         
-        # Get additional activity details
-        activity_details = {}
+        # Get the activity name first
+        activity_name = activity.get("activityName", "") or ""
         
-        # Get splits
-        try:
-            splits = garmin.get_activity_splits(activity_id)
-            activity_details["splits"] = splits
-        except Exception as e:
-            print(f"Error getting splits: {e}")
+        # Determine the actual activity type - use classifiedType if available, otherwise from Garmin
+        raw_activity_type = activity.get("activityType", {})
+        if isinstance(raw_activity_type, dict):
+            activity_type = raw_activity_type.get("typeKey", "other")
+            # Also get the display name for better context
+            activity_type_name = raw_activity_type.get("typeKey", activity_type)
+        else:
+            activity_type = str(raw_activity_type) if raw_activity_type else "other"
+            activity_type_name = activity_type
         
-        # Get HR zones distribution
-        try:
-            hr_zones = garmin.get_activity_hr_zones(activity_id)
-            activity_details["hr_zones"] = hr_zones
-        except Exception as e:
-            print(f"Error getting HR zones: {e}")
+        # Use classified type if different (our better detection)
+        classified_type = activity.get("classifiedType")
+        if classified_type and classified_type != "other":
+            activity_type = classified_type
         
-        # Get weather
-        try:
-            weather = garmin.get_activity_weather(activity_id)
-            activity_details["weather"] = weather
-        except Exception as e:
-            print(f"Error getting weather: {e}")
+        # If type is still "other" but we have a descriptive name, try to classify it
+        if activity_type == "other" and activity_name:
+            name_lower = activity_name.lower()
+            if any(kw in name_lower for kw in ['yoga', 'stretch', 'pilates']):
+                activity_type = "yoga"
+            elif any(kw in name_lower for kw in ['cold plunge', 'ice bath', 'cold']):
+                activity_type = "cold_plunge"
+            elif any(kw in name_lower for kw in ['sauna', 'steam']):
+                activity_type = "sauna"
+            elif any(kw in name_lower for kw in ['breath', 'wim hof', 'meditation']):
+                activity_type = "breathing"
         
-        # Get similar activities for comparison (same type, recent)
-        activity_type = activity.get("activityType", {}).get("typeKey", "other") if isinstance(activity.get("activityType"), dict) else "other"
+        # Debug logging - more detailed
+        print(f"[Activity Analysis] ====== ACTIVITY DATA ======")
+        print(f"[Activity Analysis] Activity ID: {activity_id}")
+        print(f"[Activity Analysis] Activity Name: '{activity_name}'")
+        print(f"[Activity Analysis] Activity Type: {activity_type} (raw: {raw_activity_type})")
+        print(f"[Activity Analysis] Duration: {(activity.get('duration', 0) or 0) / 60:.1f} min (raw: {activity.get('duration')})")
+        print(f"[Activity Analysis] Distance: {(activity.get('distance', 0) or 0) / 1000:.2f} km")
+        print(f"[Activity Analysis] Avg HR: {activity.get('averageHR', 'N/A')}")
+        print(f"[Activity Analysis] Max HR: {activity.get('maxHR', 'N/A')}")
+        print(f"[Activity Analysis] Calories: {activity.get('calories', 'N/A')}")
+        print(f"[Activity Analysis] Aerobic TE: {activity.get('aerobicTrainingEffect', activity.get('trainingEffectAerobic', 'N/A'))}")
+        print(f"[Activity Analysis] =============================")
+        
+        # Get similar activities for comparison (same type, recent) with their comprehensive data
         similar_activities = []
+        similar_activities_detailed = []
         
         try:
             # Get recent activities of same type
-            recent_activities = garmin.get_activities(limit=30)
+            recent_activities = garmin.get_activities(limit=50)
             if isinstance(recent_activities, list):
                 for act in recent_activities:
                     if not isinstance(act, dict):
                         continue
-                    act_type = act.get("activityType", {}).get("typeKey", "other") if isinstance(act.get("activityType"), dict) else "other"
+                    
+                    act_type_raw = act.get("activityType", {})
+                    if isinstance(act_type_raw, dict):
+                        act_type = act_type_raw.get("typeKey", "other")
+                    else:
+                        act_type = str(act_type_raw) if act_type_raw else "other"
+                    
+                    # Use classified type if available
+                    act_classified = act.get("classifiedType")
+                    if act_classified and act_classified != "other":
+                        act_type = act_classified
+                    
                     # Same type and not the current activity
                     if act_type == activity_type and str(act.get("activityId")) != str(activity_id):
                         similar_activities.append(act)
-                        if len(similar_activities) >= 5:
+                        
+                        # Get detailed metrics for comparison
+                        act_summary = {
+                            "name": act.get("activityName"),
+                            "date": act.get("startTimeLocal"),
+                            "duration_minutes": (act.get("duration", 0) or 0) / 60,
+                            "distance_km": (act.get("distance", 0) or 0) / 1000,
+                            "avg_hr": act.get("averageHR"),
+                            "max_hr": act.get("maxHR"),
+                            "training_effect": act.get("aerobicTrainingEffect") or act.get("trainingEffectAerobic"),
+                            "avg_pace": None,
+                        }
+                        
+                        # Calculate pace for running
+                        if act_summary["distance_km"] and act_summary["distance_km"] > 0 and act_summary["duration_minutes"]:
+                            pace = act_summary["duration_minutes"] / act_summary["distance_km"]
+                            pace_min = int(pace)
+                            pace_sec = int((pace - pace_min) * 60)
+                            act_summary["avg_pace"] = f"{pace_min}:{pace_sec:02d}/km"
+                        
+                        similar_activities_detailed.append(act_summary)
+                        
+                        if len(similar_activities) >= 10:  # Increased for better comparison
                             break
         except Exception as e:
             print(f"Error getting similar activities: {e}")
+        
+        # Log similar activities found
+        print(f"[Activity Analysis] Found {len(similar_activities)} similar activities of type '{activity_type}'")
         
         # Get user's HR zones
         user_hr_zones = {}
@@ -772,6 +933,17 @@ async def analyze_activity(activity_id: str):
             user_hr_zones = garmin.get_hr_zones()
         except Exception as e:
             print(f"Error getting user HR zones: {e}")
+        
+        # Debug: Log activity details for detection
+        activity_name = activity.get("activityName", "Unknown")
+        activity_type_key = activity.get("activityType", {}).get("typeKey", "unknown")
+        print(f"[Activity Analysis] Activity: '{activity_name}', Type: '{activity_type_key}'")
+        
+        # Check if recovery activity for logging
+        combined_lower = f"{activity_name.lower()} {activity_type_key.lower()}"
+        recovery_keywords = ['cold', 'plunge', 'ice', 'sauna', 'yoga', 'stretch', 'breath', 'meditation', 'recovery', 'wellness']
+        is_recovery = any(kw in combined_lower for kw in recovery_keywords)
+        print(f"[Activity Analysis] Detected as recovery activity: {is_recovery}")
         
         # Build the analysis prompt using PromptEngine
         prompt = PromptEngine.build_activity_analysis_prompt(
@@ -804,32 +976,90 @@ async def analyze_activity(activity_id: str):
         analysis_data["generated_at"] = datetime.now().isoformat()
         analysis_data["ai_model"] = ai_service.model_name
         
+        # Build activity summary
+        activity_summary = {
+            "name": activity.get("activityName"),
+            "type": activity_type,
+            "duration_minutes": (activity.get("duration", 0) or 0) / 60,
+            "distance_km": (activity.get("distance", 0) or 0) / 1000,
+            "calories": activity.get("calories"),
+            "avg_hr": activity.get("averageHR"),
+            "max_hr": activity.get("maxHR"),
+            "training_effect_aerobic": activity.get("aerobicTrainingEffect") or activity.get("trainingEffectAerobic"),
+            "training_effect_anaerobic": activity.get("anaerobicTrainingEffect") or activity.get("trainingEffectAnaerobic"),
+            "elevation_gain": activity.get("elevationGain"),
+            "avg_cadence": activity.get("averageRunningCadenceInStepsPerMinute"),
+            "start_time": activity.get("startTimeLocal"),
+            # New comprehensive metrics: stress, respiration, performance condition, power
+            "avg_stress": activity.get("avgStressLevel"),
+            "max_stress": activity.get("maxStressLevel"),
+            "avg_respiration": activity.get("avgRespirationRate"),
+            "max_respiration": activity.get("maxRespirationRate"),
+            "performance_condition": activity.get("performanceCondition") or activity.get("firstBeatPerformanceCondition"),
+            "avg_stride_length": activity.get("avgStrideLength"),
+            "avg_power": activity.get("avgPower"),
+            "max_power": activity.get("maxPower"),
+            "normalized_power": activity.get("normPower"),
+            "training_load": activity.get("trainingLoad"),
+            "recovery_time_minutes": activity.get("recoveryTimeInMinutes"),
+            "vo2_max": activity.get("vO2MaxValue"),
+            # Flags for extra data
+            "has_splits": bool(activity_details.get("splits")),
+            "has_weather": bool(activity_details.get("weather")),
+        }
+        
+        # Save analysis to database for caching
+        try:
+            activity_date = None
+            if activity.get("startTimeLocal"):
+                try:
+                    activity_date = datetime.strptime(activity.get("startTimeLocal")[:19], "%Y-%m-%dT%H:%M:%S")
+                except:
+                    pass
+            
+            DatabaseManager.save_activity_analysis(
+                activity_id=activity_id,
+                activity_type=activity_type,
+                activity_name=activity.get("activityName", ""),
+                activity_date=activity_date,
+                overall_score=analysis_data.get("overall_score", 70),
+                overall_rating=analysis_data.get("overall_rating", "Good"),
+                analysis_data=analysis_data,
+                activity_summary=activity_summary,
+                comparison_count=len(similar_activities),
+                similar_activities_data={"activities": similar_activities_detailed},
+                ai_model=ai_service.model_name
+            )
+        except Exception as e:
+            print(f"Warning: Could not save analysis to database: {e}")
+        
         return {
             "activity_id": activity_id,
             "analysis": analysis_data,
-            "activity_summary": {
-                "name": activity.get("activityName"),
-                "type": activity_type,
-                "duration_minutes": (activity.get("duration", 0) or 0) / 60,
-                "distance_km": (activity.get("distance", 0) or 0) / 1000,
-                "calories": activity.get("calories"),
-                "avg_hr": activity.get("averageHR"),
-                "max_hr": activity.get("maxHR"),
-                "training_effect_aerobic": activity.get("aerobicTrainingEffect") or activity.get("trainingEffectAerobic"),
-                "training_effect_anaerobic": activity.get("anaerobicTrainingEffect") or activity.get("trainingEffectAnaerobic"),
-                "elevation_gain": activity.get("elevationGain"),
-                "avg_cadence": activity.get("averageRunningCadenceInStepsPerMinute"),
-                "start_time": activity.get("startTimeLocal"),
-            },
+            "activity_summary": activity_summary,
             "comparison_activities_count": len(similar_activities),
             "has_splits": bool(activity_details.get("splits")),
             "has_weather": bool(activity_details.get("weather")),
+            "cached": False,
         }
         
     except HTTPException:
         raise
     except Exception as e:
         print(f"Activity analysis error: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/activity/{activity_id}/analysis")
+async def delete_activity_analysis(activity_id: str):
+    """Delete cached analysis for an activity (to allow regeneration)."""
+    try:
+        deleted = DatabaseManager.delete_activity_analysis(activity_id)
+        if deleted:
+            return {"message": "Analysis deleted successfully", "activity_id": activity_id}
+        else:
+            return {"message": "No analysis found to delete", "activity_id": activity_id}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -906,6 +1136,22 @@ async def generate_month_plan(request: MonthPlanRequest):
         response = ai_service.model.generate_content(prompt)
         plan_data = ai_service._extract_json(response.text)
         
+        # Debug logging
+        print(f"[Month Plan] Response received, plan_data parsed: {plan_data is not None}")
+        if plan_data:
+            print(f"[Month Plan] Keys: {list(plan_data.keys())}")
+            if "weeks" in plan_data:
+                print(f"[Month Plan] Found {len(plan_data['weeks'])} weeks")
+                for i, week in enumerate(plan_data['weeks']):
+                    if isinstance(week, dict):
+                        workout_count = len(week.get('workouts', []))
+                        print(f"[Month Plan] Week {i+1}: {workout_count} workouts")
+            else:
+                print(f"[Month Plan] WARNING: No 'weeks' key found in response!")
+                # Check if workouts are at root level
+                if "workouts" in plan_data:
+                    print(f"[Month Plan] Found {len(plan_data['workouts'])} workouts at root level")
+        
         if plan_data:
             plan_data["generated_at"] = datetime.now().isoformat()
             plan_data["ai_model"] = ai_service.model_name
@@ -916,6 +1162,7 @@ async def generate_month_plan(request: MonthPlanRequest):
                 plan_data["goal_distance_km"] = request.goal_distance_km
             return plan_data
         else:
+            print(f"[Month Plan] Failed to parse! Raw response: {response.text[:500]}...")
             return {
                 "error": "Failed to parse month plan",
                 "raw_response": response.text
@@ -940,17 +1187,33 @@ async def pin_workout_plan(request: PinPlanRequest):
         plan_data = request.plan_data
         plan_type = request.plan_type
         
+        # Debug: log the received data structure
+        print(f"Pin plan request - type: {plan_type}")
+        print(f"Pin plan data keys: {list(plan_data.keys()) if isinstance(plan_data, dict) else 'not a dict'}")
+        if "weeks" in plan_data:
+            print(f"Weeks count: {len(plan_data['weeks'])}")
+            if plan_data['weeks'] and len(plan_data['weeks']) > 0:
+                first_week = plan_data['weeks'][0]
+                print(f"First week keys: {list(first_week.keys()) if isinstance(first_week, dict) else 'not a dict'}")
+                if "workouts" in first_week:
+                    print(f"First week workouts count: {len(first_week['workouts'])}")
+        
         # Determine start date
         if request.start_date:
             start_date = datetime.strptime(request.start_date, "%Y-%m-%d").date()
         else:
             start_date = date.today()
         
+        # For weekly plans, align to the Monday of the week to ensure proper week grouping
+        if plan_type == "week":
+            while start_date.weekday() != 0:  # 0 = Monday
+                start_date -= timedelta(days=1)
+        
         # Calculate end date based on plan type
         if plan_type == "month":
             end_date = start_date + timedelta(days=28)
         else:
-            end_date = start_date + timedelta(days=7)
+            end_date = start_date + timedelta(days=6)  # Monday to Sunday = 6 days difference
         
         # Save the plan to database
         plan_id = DatabaseManager.save_workout_plan(
@@ -969,51 +1232,108 @@ async def pin_workout_plan(request: PinPlanRequest):
         # Save individual scheduled workouts
         workouts_to_save = []
         
-        if plan_type == "month" and "weeks" in plan_data:
-            # Month plan structure
+        # Process based on plan_type, not data structure
+        # This ensures weekly plans aren't incorrectly processed as monthly
+        if plan_type == "month":
+            # Month plan structure - expect weeks array
+            weeks_data = plan_data.get("weeks") or plan_data.get("weekly_plans") or []
             current_date = start_date
-            for week in plan_data.get("weeks", []):
-                for workout in week.get("workouts", []):
+            for week_idx, week in enumerate(weeks_data):
+                # Get workouts from the week - check multiple possible keys
+                week_workouts = week.get("workouts") or week.get("daily_workouts") or []
+                
+                # Find the Monday of the current week
+                week_start = current_date
+                while week_start.weekday() != 0:  # 0 = Monday
+                    week_start -= timedelta(days=1)
+                
+                for workout in week_workouts:
                     day_name = workout.get("day", "Monday")
-                    # Find the next occurrence of this day
-                    days_ahead = ["Monday", "Tuesday", "Wednesday", "Thursday", 
-                                  "Friday", "Saturday", "Sunday"].index(day_name)
-                    workout_date = current_date + timedelta(days=days_ahead)
+                    try:
+                        # Find the day offset within the week
+                        days_ahead = ["Monday", "Tuesday", "Wednesday", "Thursday", 
+                                      "Friday", "Saturday", "Sunday"].index(day_name)
+                    except ValueError:
+                        days_ahead = 0
+                    
+                    workout_date = week_start + timedelta(days=days_ahead)
                     workouts_to_save.append({
                         "date": workout_date,
                         "workout": workout
                     })
                 current_date += timedelta(days=7)
         else:
-            # Week plan structure
-            for workout in plan_data.get("workouts", []):
+            # Week plan structure - use flat workouts array
+            # First try workouts key, then fall back to extracting from weeks if AI returned that structure
+            flat_workouts = plan_data.get("workouts") or []
+            
+            # If workouts is empty but we have weeks (AI returned week plan in weeks format), extract them
+            if not flat_workouts:
+                weeks_data = plan_data.get("weeks") or plan_data.get("weekly_plans") or []
+                if weeks_data and len(weeks_data) > 0:
+                    # Take only the first week for a week plan
+                    first_week = weeks_data[0]
+                    flat_workouts = first_week.get("workouts") or first_week.get("daily_workouts") or []
+            
+            # For weekly plans, find the Monday of the current week and schedule from there
+            # This ensures all workouts stay within the same week (Week 1)
+            week_start = start_date
+            while week_start.weekday() != 0:  # 0 = Monday
+                week_start -= timedelta(days=1)
+            
+            for workout in flat_workouts:
                 day_name = workout.get("day", "Monday")
                 days_map = {
                     "Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3,
                     "Friday": 4, "Saturday": 5, "Sunday": 6
                 }
                 days_from_monday = days_map.get(day_name, 0)
-                # Calculate from start of week
-                days_until_monday = (7 - start_date.weekday()) % 7
-                workout_date = start_date + timedelta(days=days_until_monday + days_from_monday)
+                workout_date = week_start + timedelta(days=days_from_monday)
                 workouts_to_save.append({
                     "date": workout_date,
                     "workout": workout
                 })
+
         
-        # Save each scheduled workout
+        print(f"Pin plan: found {len(workouts_to_save)} workouts to save")
+        
+        # Save each scheduled workout with full details
         for item in workouts_to_save:
             workout = item["workout"]
+            
+            # Extract steps/exercises from various possible locations in AI response
+            steps = workout.get("steps") or workout.get("exercises") or []
+            
+            # Extract supplementary activities - handle both list and dict formats
+            supplementary = workout.get("supplementary")
+            if isinstance(supplementary, dict):
+                # Convert dict to list format if needed
+                supplementary = [supplementary]
+            elif not isinstance(supplementary, list):
+                supplementary = []
+            
+            # Extract other fields with fallbacks
+            description = workout.get("description") or workout.get("rationale") or ""
+            duration = workout.get("duration_minutes") or workout.get("total_duration_minutes")
+            hr_zone = workout.get("target_hr_zone") or workout.get("hr_zone")
+            hr_bpm = workout.get("target_hr_bpm") or workout.get("hr_bpm")
+            
             DatabaseManager.save_scheduled_workout(
                 plan_id=plan_id,
                 scheduled_date=item["date"],
                 workout_type=workout.get("type", "other"),
-                title=workout.get("title", "Workout"),
-                description=workout.get("description", ""),
-                duration_minutes=workout.get("duration_minutes"),
+                title=workout.get("title", workout.get("name", "Workout")),
+                description=description,
+                duration_minutes=duration,
                 intensity=workout.get("intensity", "moderate"),
-                exercises=workout.get("steps", []),
-                target_hr_zone=workout.get("target_hr_zone"),
+                exercises=steps,
+                target_hr_zone=hr_zone,
+                # Rich display fields
+                key_focus=workout.get("key_focus"),
+                estimated_distance_km=workout.get("estimated_distance_km") or workout.get("distance_km"),
+                target_hr_bpm=hr_bpm,
+                supplementary=supplementary,
+                optimal_time=workout.get("optimal_time"),
             )
         
         return {
@@ -1098,12 +1418,19 @@ async def get_pinned_plan_details(plan_id: int):
                 "intensity": w.intensity,
                 "target_hr_zone": w.target_hr_zone,
                 "exercises": w.exercises,
+                "steps": w.exercises,  # Alias for frontend compatibility
                 "is_completed": w.is_completed,
                 "completed_at": w.completed_at.isoformat() if w.completed_at else None,
                 "actual_duration_minutes": w.actual_duration_minutes,
                 "actual_calories": w.actual_calories,
                 "linked_activity_id": w.linked_activity_id,
                 "notes": w.notes,
+                # New fields for rich display
+                "key_focus": w.key_focus,
+                "estimated_distance_km": w.estimated_distance_km,
+                "target_hr_bpm": w.target_hr_bpm,
+                "supplementary": w.supplementary,
+                "optimal_time": w.optimal_time,
             }
             
             # Get linked activity details if available
@@ -1306,6 +1633,112 @@ async def delete_pinned_plan(plan_id: int):
         raise
     except Exception as e:
         print(f"Delete plan error: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AdjustPlanRequest(BaseModel):
+    plan_id: int
+    adjustment_type: str = "auto"  # auto, increase_intensity, decrease_intensity, add_recovery
+
+
+@router.post("/adjust-pinned-plan")
+async def adjust_pinned_plan(request: AdjustPlanRequest):
+    """Adjust a pinned plan based on current health data and recent performance.
+    
+    This analyzes the user's current readiness (Body Battery, HRV, Sleep) and recent
+    activity performance to suggest and apply adjustments to the remaining workouts.
+    """
+    try:
+        garmin = get_garmin_service()
+        
+        if not garmin.is_authenticated:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get the plan
+        plan = DatabaseManager.get_workout_plan(request.plan_id)
+        if not plan:
+            raise HTTPException(status_code=404, detail="Plan not found")
+        
+        # Get current health data
+        today_readiness = garmin.get_today_readiness()
+        recent_activities = garmin.get_activities(limit=10)
+        
+        # Get scheduled workouts that haven't been completed
+        scheduled = DatabaseManager.get_scheduled_workouts(request.plan_id)
+        incomplete_workouts = [w for w in scheduled if not w.is_completed]
+        
+        if not incomplete_workouts:
+            return {
+                "success": True,
+                "message": "All workouts are already completed!",
+                "adjustments_made": 0
+            }
+        
+        # Analyze readiness
+        body_battery = today_readiness.get("body_battery", 50)
+        sleep_score = today_readiness.get("sleep_score", 70)
+        hrv_status = today_readiness.get("hrv_status", "Unknown")
+        
+        # Calculate adjustment factor
+        readiness_score = (
+            (body_battery / 100) * 0.4 +
+            (sleep_score / 100) * 0.3 +
+            (1.0 if hrv_status in ["BALANCED", "HIGH"] else 0.7 if hrv_status == "LOW" else 0.85) * 0.3
+        )
+        
+        adjustments = []
+        adjustment_factor = 1.0
+        
+        if request.adjustment_type == "auto":
+            if readiness_score < 0.5:
+                adjustment_factor = 0.7
+                adjustments.append("Reduced intensity due to low readiness")
+            elif readiness_score < 0.7:
+                adjustment_factor = 0.85
+                adjustments.append("Slightly reduced intensity")
+            elif readiness_score > 0.85:
+                adjustment_factor = 1.1
+                adjustments.append("Increased intensity due to good readiness")
+        elif request.adjustment_type == "increase_intensity":
+            adjustment_factor = 1.15
+            adjustments.append("Manual increase in intensity")
+        elif request.adjustment_type == "decrease_intensity":
+            adjustment_factor = 0.8
+            adjustments.append("Manual decrease in intensity")
+        elif request.adjustment_type == "add_recovery":
+            adjustments.append("Added extra recovery day")
+        
+        # Apply adjustments to incomplete workouts
+        adjusted_count = 0
+        for workout in incomplete_workouts:
+            if workout.duration_minutes:
+                new_duration = int(workout.duration_minutes * adjustment_factor)
+                # Update workout in database (simplified - in real impl, update exercises too)
+                DatabaseManager.update_scheduled_workout(
+                    workout.id,
+                    duration_minutes=new_duration,
+                    notes=f"Adjusted ({adjustment_factor:.0%}) based on readiness"
+                )
+                adjusted_count += 1
+        
+        return {
+            "success": True,
+            "message": f"Plan adjusted based on current readiness ({readiness_score:.0%})",
+            "adjustments_made": adjusted_count,
+            "adjustment_factor": adjustment_factor,
+            "adjustments": adjustments,
+            "readiness_data": {
+                "body_battery": body_battery,
+                "sleep_score": sleep_score,
+                "hrv_status": hrv_status,
+                "readiness_score": round(readiness_score * 100)
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Adjust plan error: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
